@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2010-2020 Apple Inc. All rights reserved.
- * Copyright (C) 2017 Sony Interactive Entertainment Inc.
+ * Copyright (C) 2018 Sony Interactive Entertainment Inc.
+ * Copyright (C) 2019 Haiku, Inc.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -24,35 +24,27 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#pragma once
+#include "config.h"
+#include "NetworkSessionHaiku.h"
 
-#if OS(DARWIN)
-#include <wtf/MachSendRight.h>
-#endif
+#include "NetworkProcess.h"
+#include "NetworkSessionCreationParameters.h"
+#include "WebCookieManager.h"
+#include <WebCore/NotImplemented.h>
 
-#if USE(UNIX_DOMAIN_SOCKETS)
-#include <wtf/unix/UnixFileDescriptor.h>
-#endif
+namespace WebKit {
 
-#if PLATFORM(HAIKU)
-#include <OS.h>
-#include <String.h>
-#endif
+using namespace WebCore;
 
-namespace IPC {
+NetworkSessionHaiku::NetworkSessionHaiku(NetworkProcess& networkProcess, const NetworkSessionCreationParameters& parameters)
+    : NetworkSession(networkProcess, parameters)
+{
+    notImplemented();
+}
 
-// IPC::Attachment is a type representing objects that cannot be transferred as data,
-// rather they are transferred via operating system cross-process communication primitives.
-#if OS(DARWIN)
-using Attachment = MachSendRight;
-#elif OS(WINDOWS)
-struct Attachment { }; // Windows does not need attachments at the moment.
-#elif USE(UNIX_DOMAIN_SOCKETS)
-using Attachment = UnixFileDescriptor;
-#elif USE(HAIKU)
-using Attachment = int;
-#else
-#error Unsupported platform
-#endif
+NetworkSessionHaiku::~NetworkSessionHaiku()
+{
 
-} // namespace IPC
+}
+
+} // namespace WebKit
