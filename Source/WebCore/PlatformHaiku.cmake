@@ -80,7 +80,6 @@ list(APPEND WebCore_SOURCES
   platform/haiku/KeyedEncoderHaiku.cpp
   platform/haiku/KURLHaiku.cpp
   platform/haiku/LocalizedStringsHaiku.cpp
-  platform/haiku/LoggingHaiku.cpp
   platform/haiku/MIMETypeRegistryHaiku.cpp
   platform/haiku/MainThreadSharedTimerHaiku.cpp
   platform/haiku/PasteboardHaiku.cpp
@@ -146,6 +145,8 @@ list(APPEND WebCore_SOURCES
   platform/text/haiku/StringHaiku.cpp
 
   rendering/haiku/RenderThemeHaiku.cpp
+
+  platform/unix/LoggingUnix.cpp
 
   inspector/LegacyWebSocketInspectorInstrumentation.cpp
 )
