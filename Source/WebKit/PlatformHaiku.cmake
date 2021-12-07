@@ -19,8 +19,6 @@ list(APPEND WebKit_SOURCES
 
     Platform/classifier/ResourceLoadStatisticsClassifier.cpp
 
-    Platform/classifier/ResourceLoadStatisticsClassifier.cpp
-
     Platform/haiku/ModuleHaiku.cpp
 
     Platform/unix/LoggingUnix.cpp
