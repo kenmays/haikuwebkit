@@ -128,6 +128,7 @@ public:
 #endif
 
 #if USE(HAIKU_EVENT_LOOP)
+    WTF_EXPORT_PRIVATE void setAppMIMEType(const char* const);
     WTF_EXPORT_PRIVATE BLooper* runLoopLooper() const { return m_handler->Looper(); }
 #endif
 
