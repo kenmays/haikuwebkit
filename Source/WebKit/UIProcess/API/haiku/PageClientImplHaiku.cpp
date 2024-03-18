@@ -26,6 +26,8 @@
 
 #include "PageClientImplHaiku.h"
 
+#include "DrawingAreaCoordinatedGraphics.h"
+#include "DrawingAreaProxyCoordinatedGraphics.h"
 #include "DrawingAreaProxy.h"
 #include "WebProcessProxy.h"
 #include "WebViewBase.h"
@@ -41,8 +43,12 @@ namespace WebKit
 
     std::unique_ptr<DrawingAreaProxy> PageClientImpl::createDrawingAreaProxy(WebKit::WebProcessProxy&)
     {
-#if USE(COORDINATED_GRAPHICS)
+#if USE(COORDINATED_GRAPHICS) || USE(TEXTURE_MAPPER)
         return std::make_unique<DrawingAreaProxyCoordinatedGraphics>(*fWebView.page());
+#else
+		// This will likely cause a crash from a failing assert. At least it's
+		// better than crashing because of not returning anything
+		return nullptr;
 #endif
     }
 
