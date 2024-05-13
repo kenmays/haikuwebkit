@@ -26,8 +26,11 @@
 
 #include "PageClientImplHaiku.h"
 
+#if USE(COORDINATED_GRAPHICS)
 #include "DrawingAreaCoordinatedGraphics.h"
 #include "DrawingAreaProxyCoordinatedGraphics.h"
+#endif
+
 #include "DrawingAreaProxy.h"
 #include "WebProcessProxy.h"
 #include "WebViewBase.h"
