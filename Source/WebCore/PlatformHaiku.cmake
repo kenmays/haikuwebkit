@@ -81,7 +81,6 @@ list(APPEND WebCore_SOURCES
   platform/haiku/KeyedDecoderHaiku.cpp
   platform/haiku/KeyedEncoderHaiku.cpp
   platform/haiku/KURLHaiku.cpp
-  platform/haiku/LocalizedStringsHaiku.cpp
   platform/haiku/MIMETypeRegistryHaiku.cpp
   platform/haiku/MainThreadSharedTimerHaiku.cpp
   platform/haiku/PasteboardHaiku.cpp
