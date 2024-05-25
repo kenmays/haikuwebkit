@@ -40,8 +40,10 @@
 #include "ElementTargetingTypes.h"
 #include "FloatPoint.h"
 #include "FloatRect.h"
+#include "HTMLAnchorElement.h"
 #include "HTMLBodyElement.h"
 #include "HTMLFrameOwnerElement.h"
+#include "HTMLImageElement.h"
 #include "HTMLMediaElement.h"
 #include "HTMLNames.h"
 #include "HitTestRequest.h"
@@ -57,6 +59,7 @@
 #include "RenderView.h"
 #include "ShadowRoot.h"
 #include "SimpleRange.h"
+#include "StyleImage.h"
 #include "TextExtraction.h"
 #include "TextIterator.h"
 #include "TypedElementDescendantIteratorInlines.h"
@@ -67,9 +70,13 @@ namespace WebCore {
 static constexpr auto maximumNumberOfClasses = 5;
 static constexpr auto marginForTrackingAdjustmentRects = 5;
 static constexpr auto minimumDistanceToConsiderEdgesEquidistant = 2;
+static constexpr auto minimumWidthForNearbyTarget = 2;
+static constexpr auto minimumHeightForNearbyTarget = 2;
 static constexpr auto minimumLengthForSearchableText = 25;
 static constexpr auto maximumLengthForSearchableText = 100;
-static constexpr auto selectorBasedVisibilityAdjustmentTimeLimit = 30_s;
+static constexpr auto selectorBasedVisibilityAdjustmentThrottlingTimeLimit = 10_s;
+static constexpr auto selectorBasedVisibilityAdjustmentInterval = 1_s;
+static constexpr auto maximumNumberOfAdditionalAdjustments = 20;
 static constexpr auto adjustmentClientRectCleanUpDelay = 15_s;
 static constexpr auto minimumAreaRatioForElementToCoverViewport = 0.95;
 static constexpr auto minimumAreaForInterpolation = 200000;
@@ -111,6 +118,7 @@ using ElementSelectorCache = HashMap<Ref<Element>, std::optional<String>>;
 ElementTargetingController::ElementTargetingController(Page& page)
     : m_page { page }
     , m_recentAdjustmentClientRectsCleanUpTimer { *this, &ElementTargetingController::cleanUpAdjustmentClientRects, adjustmentClientRectCleanUpDelay }
+    , m_selectorBasedVisibilityAdjustmentTimer { *this, &ElementTargetingController::selectorBasedVisibilityAdjustmentTimerFired }
 {
 }
 
@@ -585,6 +593,62 @@ static bool hasAudibleMedia(const Element& element)
     return false;
 }
 
+static URL urlForElement(const Element& element)
+{
+    if (RefPtr anchor = dynamicDowncast<HTMLAnchorElement>(element))
+        return anchor->href();
+
+    if (RefPtr image = dynamicDowncast<HTMLImageElement>(element))
+        return image->currentURL();
+
+    if (RefPtr media = dynamicDowncast<HTMLMediaElement>(element))
+        return media->currentSrc();
+
+    if (CheckedPtr renderer = element.renderer()) {
+        if (auto& style = renderer->style(); style.hasBackgroundImage()) {
+            if (RefPtr image = style.backgroundLayers().image())
+                return image->reresolvedURL(element.document());
+        }
+    }
+
+    return { };
+}
+
+static void collectMediaAndLinkURLsRecursive(const Element& element, HashSet<URL>& urls)
+{
+    auto addURLForElement = [&urls](const Element& element) {
+        if (auto url = urlForElement(element); !url.isEmpty() && !url.protocolIsData() && !url.protocolIsBlob())
+            urls.add(WTFMove(url));
+    };
+
+    addURLForElement(element);
+
+    for (auto& descendant : descendantsOfType<Element>(element)) {
+        addURLForElement(descendant);
+
+        auto frameOwner = dynamicDowncast<HTMLFrameOwnerElement>(descendant);
+        if (!frameOwner)
+            continue;
+
+        RefPtr contentDocument = frameOwner->contentDocument();
+        if (!contentDocument)
+            continue;
+
+        RefPtr documentElement = contentDocument->documentElement();
+        if (!documentElement)
+            continue;
+
+        collectMediaAndLinkURLsRecursive(*documentElement, urls);
+    }
+}
+
+static HashSet<URL> collectMediaAndLinkURLs(const Element& element)
+{
+    HashSet<URL> urls;
+    collectMediaAndLinkURLsRecursive(element, urls);
+    return urls;
+}
+
 enum class IsNearbyTarget : bool { No, Yes };
 static TargetedElementInfo targetedElementInfo(Element& element, IsNearbyTarget isNearbyTarget, ElementSelectorCache& cache)
 {
@@ -593,16 +657,19 @@ static TargetedElementInfo targetedElementInfo(Element& element, IsNearbyTarget 
         .elementIdentifier = element.identifier(),
         .documentIdentifier = element.document().identifier(),
         .offsetEdges = computeOffsetEdges(renderer->style()),
-        .renderedText = TextExtraction::extractRenderedText(element),
+        .renderedText = TextExtraction::extractRenderedText(element, TextExtraction::OnlyIncludeTextContent::No),
         .searchableText = searchableTextForTarget(element),
+        .screenReaderText = TextExtraction::extractRenderedText(element, TextExtraction::OnlyIncludeTextContent::Yes),
         .selectors = selectorsForTarget(element, cache),
         .boundsInRootView = element.boundingBoxInRootViewCoordinates(),
         .boundsInClientCoordinates = computeClientRect(*renderer),
         .positionType = renderer->style().position(),
         .childFrameIdentifiers = collectChildFrameIdentifiers(element),
+        .mediaAndLinkURLs = collectMediaAndLinkURLs(element),
         .isNearbyTarget = isNearbyTarget == IsNearbyTarget::Yes,
         .isPseudoElement = element.isPseudoElement(),
         .isInShadowTree = element.isInShadowTree(),
+        .isInVisibilityAdjustmentSubtree = element.isInVisibilityAdjustmentSubtree(),
         .hasAudibleMedia = hasAudibleMedia(element)
     };
 }
@@ -703,6 +770,8 @@ Vector<TargetedElementInfo> ElementTargetingController::findTargets(TargetedElem
         return findNodes(searchText);
     }, [this, &request](const FloatPoint& point) {
         return findNodes(point, request.shouldIgnorePointerEventsNone);
+    }, [this](const TargetedElementSelectors& selectors) {
+        return findNodes(selectors);
     }), request.data);
 
     if (nodes.isEmpty())
@@ -784,15 +853,7 @@ static Element* searchForElementContainingText(ContainerNode& container, const S
 
 std::pair<Vector<Ref<Node>>, RefPtr<Element>> ElementTargetingController::findNodes(const String& searchText)
 {
-    RefPtr page = m_page.get();
-    if (!page)
-        return { };
-
-    RefPtr mainFrame = dynamicDowncast<LocalFrame>(page->mainFrame());
-    if (!mainFrame)
-        return { };
-
-    RefPtr document = mainFrame->document();
+    RefPtr document = mainDocument();
     if (!document)
         return { };
 
@@ -816,8 +877,48 @@ std::pair<Vector<Ref<Node>>, RefPtr<Element>> ElementTargetingController::findNo
     potentialCandidates.append(*foundElement);
     for (auto& ancestor : ancestorsOfType<Element>(*foundElement))
         potentialCandidates.append(ancestor);
-
     return { WTFMove(potentialCandidates), WTFMove(foundElement) };
+}
+
+std::pair<Vector<Ref<Node>>, RefPtr<Element>> ElementTargetingController::findNodes(const TargetedElementSelectors& selectors)
+{
+    auto [foundElement, selectorIncludingPseudo] = findElementFromSelectors(selectors);
+    if (!foundElement)
+        return { };
+
+    return { { *foundElement }, foundElement };
+}
+
+static Vector<Ref<Element>> filterRedundantNearbyTargets(HashSet<Ref<Element>>&& unfilteredNearbyTargets)
+{
+    HashMap<Ref<Element>, bool> shouldKeepCache;
+    Vector<Ref<Element>> filteredResults;
+
+    for (auto& originalTarget : unfilteredNearbyTargets) {
+        Vector<Ref<Element>> ancestorsOfTarget;
+        bool shouldKeep = true;
+        for (auto& ancestor : ancestorsOfType<Element>(originalTarget)) {
+            if (unfilteredNearbyTargets.contains(ancestor)) {
+                shouldKeep = false;
+                break;
+            }
+
+            if (auto entry = shouldKeepCache.find(ancestor); entry != shouldKeepCache.end()) {
+                shouldKeep = entry->value;
+                break;
+            }
+
+            ancestorsOfTarget.append(ancestor);
+        }
+
+        for (auto& ancestor : ancestorsOfTarget)
+            shouldKeepCache.add(ancestor, shouldKeep);
+
+        if (shouldKeep)
+            filteredResults.append(originalTarget);
+    }
+
+    return filteredResults;
 }
 
 Vector<TargetedElementInfo> ElementTargetingController::extractTargets(Vector<Ref<Node>>&& nodes, RefPtr<Element>&& innerElement, bool canIncludeNearbyElements)
@@ -908,11 +1009,12 @@ Vector<TargetedElementInfo> ElementTargetingController::extractTargets(Vector<Re
         if (shouldSkipTargetThatCoversViewport)
             continue;
 
-        bool shouldAddTarget = targetRenderer->isFixedPositioned()
+        bool shouldAddTarget = targetAreaRatio > 0
+            && (targetRenderer->isFixedPositioned()
             || targetRenderer->isStickilyPositioned()
             || (targetRenderer->isAbsolutelyPositioned() && targetAreaRatio < maximumAreaRatioForAbsolutelyPositionedContent(viewportArea))
             || (minimumAreaRatioForInFlowContent(viewportArea) < targetAreaRatio && targetAreaRatio < maximumAreaRatioForInFlowContent(viewportArea))
-            || !target->firstElementChild();
+            || !target->firstElementChild());
 
         if (!shouldAddTarget)
             continue;
@@ -968,11 +1070,11 @@ Vector<TargetedElementInfo> ElementTargetingController::extractTargets(Vector<Re
     if (additionalRegionForNearbyElements.isEmpty())
         return results;
 
-    auto nearbyTargets = [&] {
-        HashSet<Ref<Element>> targets;
+    auto nearbyTargets = [&]() -> Vector<Ref<Element>> {
+        HashSet<Ref<Element>> results;
         CheckedPtr bodyRenderer = bodyElement->renderer();
         if (!bodyRenderer)
-            return targets;
+            return { };
 
         for (auto& renderer : descendantsOfType<RenderElement>(*bodyRenderer)) {
             if (!renderer.isOutOfFlowPositioned())
@@ -982,7 +1084,14 @@ Vector<TargetedElementInfo> ElementTargetingController::extractTargets(Vector<Re
             if (!element)
                 continue;
 
-            if (targets.contains(*element))
+            bool elementIsAlreadyTargeted = targets.containsIf([&element](auto& target) {
+                return target->containsIncludingShadowDOM(element.get());
+            });
+
+            if (elementIsAlreadyTargeted)
+                continue;
+
+            if (results.contains(*element))
                 continue;
 
             if (nodes.containsIf([&](auto& node) { return node.ptr() == element; }))
@@ -992,15 +1101,22 @@ Vector<TargetedElementInfo> ElementTargetingController::extractTargets(Vector<Re
                 continue;
 
             auto boundingBox = element->boundingBoxInRootViewCoordinates();
+            if (boundingBox.width() <= minimumWidthForNearbyTarget)
+                continue;
+
+            if (boundingBox.height() <= minimumHeightForNearbyTarget)
+                continue;
+
             if (!additionalRegionForNearbyElements.contains(boundingBox))
                 continue;
 
             if (computeViewportAreaRatio(boundingBox) > nearbyTargetAreaRatio)
                 continue;
 
-            targets.add(element.releaseNonNull());
+            results.add(element.releaseNonNull());
         }
-        return targets;
+
+        return filterRedundantNearbyTargets(WTFMove(results));
     }();
 
     for (auto& element : nearbyTargets) {
@@ -1048,7 +1164,7 @@ static inline VisibilityAdjustmentResult adjustVisibilityIfNeeded(Element& eleme
     return { adjustedElement.ptr(), adjustment == VisibilityAdjustment::Subtree };
 }
 
-bool ElementTargetingController::adjustVisibility(const Vector<std::pair<ElementIdentifier, ScriptExecutionContextIdentifier>>& identifiers)
+bool ElementTargetingController::adjustVisibility(Vector<TargetedElementAdjustment>&& adjustments)
 {
     RefPtr page = m_page.get();
     if (!page)
@@ -1068,7 +1184,8 @@ bool ElementTargetingController::adjustVisibility(const Vector<std::pair<Element
         return false;
 
     Region newAdjustmentRegion;
-    for (auto [elementID, documentID] : identifiers) {
+    for (auto& [identifiers, selectors] : adjustments) {
+        auto [elementID, documentID] = identifiers;
         if (auto rect = m_recentAdjustmentClientRects.get(elementID); !rect.isEmpty())
             newAdjustmentRegion.unite(rect);
     }
@@ -1077,10 +1194,21 @@ bool ElementTargetingController::adjustVisibility(const Vector<std::pair<Element
     m_adjustmentClientRegion.unite(newAdjustmentRegion);
 
     Vector<Ref<Element>> elements;
-    elements.reserveInitialCapacity(identifiers.size());
-    for (auto [elementID, documentID] : identifiers) {
-        if (RefPtr element = Element::fromIdentifier(elementID); element && element->document().identifier() == documentID)
-            elements.append(element.releaseNonNull());
+    elements.reserveInitialCapacity(adjustments.size());
+    for (auto& [identifiers, selectors] : adjustments) {
+        auto [elementID, documentID] = identifiers;
+        RefPtr element = Element::fromIdentifier(elementID);
+        if (!element)
+            continue;
+
+        if (element->document().identifier() != documentID)
+            continue;
+
+        elements.append(element.releaseNonNull());
+        if (m_additionalAdjustmentCount < maximumNumberOfAdditionalAdjustments) {
+            m_visibilityAdjustmentSelectors.append({ elementID, WTFMove(selectors) });
+            m_additionalAdjustmentCount++;
+        }
     }
 
     bool changed = false;
@@ -1176,7 +1304,21 @@ void ElementTargetingController::adjustVisibilityInRepeatedlyTargetedRegions(Doc
         adjustRegionAfterViewportSizeChange(m_repeatedAdjustmentClientRegion, previousViewportSize, m_viewportSizeForVisibilityAdjustment);
     }
 
-    applyVisibilityAdjustmentFromSelectors(document);
+    if (RefPtr loader = document.loader(); loader && !m_didCollectInitialAdjustments) {
+        m_initialVisibilityAdjustmentSelectors = loader->visibilityAdjustmentSelectors();
+        m_visibilityAdjustmentSelectors.appendVector(m_initialVisibilityAdjustmentSelectors.map([](auto& selectors) -> std::pair<ElementIdentifier, TargetedElementSelectors> {
+            return { { }, selectors };
+        }));
+        m_startTimeForSelectorBasedVisibilityAdjustment = ApproximateTime::now();
+        m_didCollectInitialAdjustments = true;
+    }
+
+    if (!m_visibilityAdjustmentSelectors.isEmpty()) {
+        if (ApproximateTime::now() - m_startTimeForSelectorBasedVisibilityAdjustment <= selectorBasedVisibilityAdjustmentThrottlingTimeLimit)
+            applyVisibilityAdjustmentFromSelectors();
+        else if (!m_selectorBasedVisibilityAdjustmentTimer.isActive())
+            m_selectorBasedVisibilityAdjustmentTimer.startOneShot(selectorBasedVisibilityAdjustmentInterval);
+    }
 
     if (m_repeatedAdjustmentClientRegion.isEmpty())
         return;
@@ -1223,141 +1365,69 @@ void ElementTargetingController::adjustVisibilityInRepeatedlyTargetedRegions(Doc
     dispatchVisibilityAdjustmentStateDidChange();
 }
 
-void ElementTargetingController::applyVisibilityAdjustmentFromSelectors(Document& document)
+static std::pair<String, VisibilityAdjustment> resolveSelectorToQuery(const String& selectorIncludingPseudo)
 {
+    auto components = selectorIncludingPseudo.splitAllowingEmptyEntries("::"_s);
+    if (components.size() == 1)
+        return { components.first(), VisibilityAdjustment::Subtree };
+
+    if (components.size() == 2) {
+        auto pseudo = components.last();
+        if (equalLettersIgnoringASCIICase(pseudo, "after"_s))
+            return { components.first(), VisibilityAdjustment::AfterPseudo };
+
+        if (equalLettersIgnoringASCIICase(pseudo, "before"_s))
+            return { components.first(), VisibilityAdjustment::BeforePseudo };
+    }
+
+    return { { }, VisibilityAdjustment::Subtree };
+}
+
+void ElementTargetingController::applyVisibilityAdjustmentFromSelectors()
+{
+    if (m_visibilityAdjustmentSelectors.isEmpty())
+        return;
+
     RefPtr page = m_page.get();
     if (!page)
         return;
 
-    RefPtr loader = document.loader();
-    if (!loader)
+    RefPtr document = mainDocument();
+    if (!document)
         return;
 
-    auto currentTime = ApproximateTime::now();
-    if (!m_remainingVisibilityAdjustmentSelectors) {
-        m_remainingVisibilityAdjustmentSelectors = loader->visibilityAdjustmentSelectors();
-        m_startTimeForSelectorBasedVisibilityAdjustment = currentTime;
-    }
-
-    if (currentTime - m_startTimeForSelectorBasedVisibilityAdjustment >= selectorBasedVisibilityAdjustmentTimeLimit) {
-        m_remainingVisibilityAdjustmentSelectors->clear();
-        return;
-    }
-
-    if (m_remainingVisibilityAdjustmentSelectors->isEmpty())
-        return;
-
-    auto resolveSelectorToQuery = [](const String& selectorIncludingPseudo) -> std::pair<String, VisibilityAdjustment> {
-        auto components = selectorIncludingPseudo.splitAllowingEmptyEntries("::"_s);
-        if (components.size() == 1)
-            return { components.first(), VisibilityAdjustment::Subtree };
-
-        if (components.size() == 2) {
-            auto pseudo = components.last();
-            if (equalLettersIgnoringASCIICase(pseudo, "after"_s))
-                return { components.first(), VisibilityAdjustment::AfterPseudo };
-
-            if (equalLettersIgnoringASCIICase(pseudo, "before"_s))
-                return { components.first(), VisibilityAdjustment::BeforePseudo };
-        }
-
-        return { { }, VisibilityAdjustment::Subtree };
-    };
-
-    document.updateLayoutIgnorePendingStylesheets();
+    document->updateLayoutIgnorePendingStylesheets();
 
     auto viewportArea = m_viewportSizeForVisibilityAdjustment.area();
     Region adjustmentRegion;
     Vector<String> matchingSelectors;
-    for (auto& selectorsForElementIncludingShadowHosts : *m_remainingVisibilityAdjustmentSelectors) {
-        if (selectorsForElementIncludingShadowHosts.isEmpty())
+    for (auto& [identifier, selectorsForElementIncludingShadowHosts] : m_visibilityAdjustmentSelectors) {
+        auto [element, selectorIncludingPseudo] = findElementFromSelectors(selectorsForElementIncludingShadowHosts);
+        if (!element)
             continue;
 
-        bool foundLastTarget = false;
-        Ref<ContainerNode> containerToQuery = document;
-        size_t indexOfSelectorToQuery = 0;
-        for (auto& selectorsToQuery : selectorsForElementIncludingShadowHosts) {
-            bool isLastTarget = ++indexOfSelectorToQuery == selectorsForElementIncludingShadowHosts.size();
-            RefPtr<Element> currentTarget;
-            for (auto& selectorIncludingPseudo : selectorsToQuery) {
-                auto [selector, adjustment] = resolveSelectorToQuery(selectorIncludingPseudo);
-                if (selector.isEmpty()) {
-                    // FIXME: Handle the case where the full selector is `::after|before`.
-                    continue;
-                }
+        auto [selector, adjustment] = resolveSelectorToQuery(selectorIncludingPseudo);
+        auto currentAdjustment = element->visibilityAdjustment();
+        if (currentAdjustment.contains(adjustment))
+            continue;
 
-                auto queryResult = containerToQuery->querySelector(selector);
-                if (queryResult.hasException())
-                    continue;
+        element->setVisibilityAdjustment(currentAdjustment | adjustment);
 
-                RefPtr element = queryResult.releaseReturnValue();
-                if (!element)
-                    continue;
+        if (adjustment == VisibilityAdjustment::Subtree)
+            element->invalidateStyleAndRenderersForSubtree();
+        else
+            element->invalidateStyle();
 
-                CheckedPtr renderer = element->renderer();
-                if (!renderer)
-                    continue;
+        m_adjustedElements.add(*element);
 
-                if (adjustment == VisibilityAdjustment::AfterPseudo && !element->afterPseudoElement())
-                    continue;
+        if (auto clientRect = inflatedClientRectForAdjustmentRegionTracking(*element, viewportArea))
+            adjustmentRegion.unite(*clientRect);
 
-                if (adjustment == VisibilityAdjustment::BeforePseudo && !element->beforePseudoElement())
-                    continue;
-
-                if (isLastTarget) {
-                    if (computeClientRect(*renderer).isEmpty())
-                        continue;
-
-                    auto currentAdjustment = element->visibilityAdjustment();
-                    if (!currentAdjustment.contains(adjustment)) {
-                        element->setVisibilityAdjustment(currentAdjustment | adjustment);
-
-                        if (adjustment == VisibilityAdjustment::Subtree)
-                            element->invalidateStyleAndRenderersForSubtree();
-                        else
-                            element->invalidateStyle();
-
-                        m_adjustedElements.add(*element);
-
-                        if (auto clientRect = inflatedClientRectForAdjustmentRegionTracking(*element, viewportArea))
-                            adjustmentRegion.unite(*clientRect);
-                    }
-                    matchingSelectors.append(selectorIncludingPseudo);
-                }
-
-                currentTarget = WTFMove(element);
-                break;
-            }
-
-            if (!currentTarget) {
-                // We failed to resolve the targeted element, or one of its shadow hosts.
-                break;
-            }
-
-            if (isLastTarget) {
-                // We resolved the final targeted element.
-                foundLastTarget = true;
-                break;
-            }
-
-            RefPtr nextShadowRoot = currentTarget->shadowRoot();
-            if (!nextShadowRoot)
-                break;
-
-            // Continue the search underneath the next shadow root.
-            containerToQuery = nextShadowRoot.releaseNonNull();
-        }
-
-        if (foundLastTarget)
-            selectorsForElementIncludingShadowHosts.clear();
+        matchingSelectors.append(WTFMove(selectorIncludingPseudo));
     }
 
     if (!adjustmentRegion.isEmpty())
         m_adjustmentClientRegion.unite(adjustmentRegion);
-
-    m_remainingVisibilityAdjustmentSelectors->removeAllMatching([](auto& selectors) {
-        return selectors.isEmpty();
-    });
 
     if (matchingSelectors.isEmpty())
         return;
@@ -1366,19 +1436,94 @@ void ElementTargetingController::applyVisibilityAdjustmentFromSelectors(Document
     page->chrome().client().didAdjustVisibilityWithSelectors(WTFMove(matchingSelectors));
 }
 
+ElementTargetingController::FindElementFromSelectorsResult ElementTargetingController::findElementFromSelectors(const TargetedElementSelectors& selectorsForElementIncludingShadowHosts)
+{
+    if (selectorsForElementIncludingShadowHosts.isEmpty())
+        return { };
+
+    RefPtr document = mainDocument();
+    if (!document)
+        return { };
+
+    Ref<ContainerNode> containerToQuery = *document;
+    size_t indexOfSelectorToQuery = 0;
+    for (auto& selectorsToQuery : selectorsForElementIncludingShadowHosts) {
+        bool isLastTarget = ++indexOfSelectorToQuery == selectorsForElementIncludingShadowHosts.size();
+        RefPtr<Element> currentTarget;
+        for (auto& selectorIncludingPseudo : selectorsToQuery) {
+            auto [selector, adjustment] = resolveSelectorToQuery(selectorIncludingPseudo);
+            if (selector.isEmpty()) {
+                // FIXME: Handle the case where the full selector is `::after|before`.
+                continue;
+            }
+
+            auto queryResult = containerToQuery->querySelector(selector);
+            if (queryResult.hasException())
+                continue;
+
+            RefPtr element = queryResult.releaseReturnValue();
+            if (!element)
+                continue;
+
+            CheckedPtr renderer = element->renderer();
+            if (!renderer)
+                continue;
+
+            if (adjustment == VisibilityAdjustment::AfterPseudo && !element->afterPseudoElement())
+                continue;
+
+            if (adjustment == VisibilityAdjustment::BeforePseudo && !element->beforePseudoElement())
+                continue;
+
+            if (isLastTarget) {
+                if (computeClientRect(*renderer).isEmpty())
+                    return { };
+
+                return { WTFMove(element), selectorIncludingPseudo };
+            }
+
+            currentTarget = WTFMove(element);
+            break;
+        }
+
+        if (!currentTarget) {
+            // We failed to resolve the targeted element, or one of its shadow hosts.
+            break;
+        }
+
+        if (isLastTarget) {
+            // We resolved the final targeted element.
+            break;
+        }
+
+        RefPtr nextShadowRoot = currentTarget->shadowRoot();
+        if (!nextShadowRoot)
+            break;
+
+        // Continue the search underneath the next shadow root.
+        containerToQuery = nextShadowRoot.releaseNonNull();
+    }
+
+    return { };
+}
+
 void ElementTargetingController::reset()
 {
     m_adjustmentClientRegion = { };
     m_repeatedAdjustmentClientRegion = { };
     m_viewportSizeForVisibilityAdjustment = { };
     m_adjustedElements = { };
-    m_remainingVisibilityAdjustmentSelectors = { };
+    m_visibilityAdjustmentSelectors = { };
+    m_initialVisibilityAdjustmentSelectors = { };
+    m_didCollectInitialAdjustments = false;
+    m_additionalAdjustmentCount = 0;
+    m_selectorBasedVisibilityAdjustmentTimer.stop();
     m_startTimeForSelectorBasedVisibilityAdjustment = { };
     m_recentAdjustmentClientRectsCleanUpTimer.stop();
     cleanUpAdjustmentClientRects();
 }
 
-bool ElementTargetingController::resetVisibilityAdjustments(const Vector<std::pair<ElementIdentifier, ScriptExecutionContextIdentifier>>& identifiers)
+bool ElementTargetingController::resetVisibilityAdjustments(const Vector<TargetedElementIdentifiers>& identifiers)
 {
     RefPtr page = m_page.get();
     if (!page)
@@ -1396,11 +1541,11 @@ bool ElementTargetingController::resetVisibilityAdjustments(const Vector<std::pa
     if (!document)
         return false;
 
-    Vector<Ref<Element>> elementsToReset;
+    HashSet<Ref<Element>> elementsToReset;
     if (identifiers.isEmpty()) {
         elementsToReset.reserveInitialCapacity(m_adjustedElements.computeSize());
         for (auto& element : m_adjustedElements)
-            elementsToReset.append(element);
+            elementsToReset.add(element);
         m_adjustedElements.clear();
     } else {
         elementsToReset.reserveInitialCapacity(identifiers.size());
@@ -1415,9 +1560,25 @@ bool ElementTargetingController::resetVisibilityAdjustments(const Vector<std::pa
             if (!m_adjustedElements.remove(*element))
                 continue;
 
-            elementsToReset.append(element.releaseNonNull());
+            elementsToReset.add(element.releaseNonNull());
         }
     }
+
+    if (RefPtr loader = document->loader(); loader && !identifiers.isEmpty()) {
+        m_initialVisibilityAdjustmentSelectors.removeAllMatching([&](auto& selectors) {
+            auto foundElement = findElementFromSelectors(selectors).element;
+            return foundElement && elementsToReset.contains(*foundElement);
+        });
+        m_visibilityAdjustmentSelectors = m_initialVisibilityAdjustmentSelectors.map([](auto& selectors) -> std::pair<ElementIdentifier, TargetedElementSelectors> {
+            return { { }, selectors };
+        });
+    } else {
+        // There are no initial adjustments after resetting.
+        m_visibilityAdjustmentSelectors = { };
+        m_initialVisibilityAdjustmentSelectors = { };
+    }
+    m_additionalAdjustmentCount = 0;
+    m_didCollectInitialAdjustments = true;
 
     if (elementsToReset.isEmpty())
         return false;
@@ -1521,6 +1682,24 @@ void ElementTargetingController::dispatchVisibilityAdjustmentStateDidChange()
     page->forEachDocument([](auto& document) {
         document.visibilityAdjustmentStateDidChange();
     });
+}
+
+RefPtr<Document> ElementTargetingController::mainDocument() const
+{
+    RefPtr page = m_page.get();
+    if (!page)
+        return { };
+
+    RefPtr mainFrame = dynamicDowncast<LocalFrame>(page->mainFrame());
+    if (!mainFrame)
+        return { };
+
+    return mainFrame->document();
+}
+
+void ElementTargetingController::selectorBasedVisibilityAdjustmentTimerFired()
+{
+    applyVisibilityAdjustmentFromSelectors();
 }
 
 } // namespace WebCore

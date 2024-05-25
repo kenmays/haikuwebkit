@@ -253,18 +253,18 @@ WebGLAny WebGLRenderingContext::getFramebufferAttachmentParameter(GCGLenum targe
     if (isContextLost())
         return nullptr;
 
-    const char* functionName = "getFramebufferAttachmentParameter";
+    auto functionName = "getFramebufferAttachmentParameter"_s;
     if (!validateFramebufferFuncParameters(functionName, target, attachment))
         return nullptr;
 
     if (!m_framebufferBinding || !m_framebufferBinding->object()) {
-        synthesizeGLError(GraphicsContextGL::INVALID_OPERATION, functionName, "no framebuffer bound");
+        synthesizeGLError(GraphicsContextGL::INVALID_OPERATION, functionName, "no framebuffer bound"_s);
         return nullptr;
     }
 
 #if ENABLE(WEBXR)
     if (m_framebufferBinding->isOpaque()) {
-        synthesizeGLError(GraphicsContextGL::INVALID_OPERATION, functionName, "An opaque framebuffer's attachments cannot be inspected or changed");
+        synthesizeGLError(GraphicsContextGL::INVALID_OPERATION, functionName, "An opaque framebuffer's attachments cannot be inspected or changed"_s);
         return nullptr;
     }
 #endif
@@ -275,7 +275,7 @@ WebGLAny WebGLRenderingContext::getFramebufferAttachmentParameter(GCGLenum targe
             return static_cast<unsigned>(GraphicsContextGL::NONE);
         // OpenGL ES 2.0 specifies INVALID_ENUM in this case, while desktop GL
         // specifies INVALID_OPERATION.
-        synthesizeGLError(GraphicsContextGL::INVALID_ENUM, functionName, "invalid parameter name");
+        synthesizeGLError(GraphicsContextGL::INVALID_ENUM, functionName, "invalid parameter name"_s);
         return nullptr;
     }
 
@@ -296,23 +296,23 @@ WebGLAny WebGLRenderingContext::getFramebufferAttachmentParameter(GCGLenum targe
         return m_context->getFramebufferAttachmentParameteri(target, attachment, pname);
     case GraphicsContextGL::FRAMEBUFFER_ATTACHMENT_COLOR_ENCODING_EXT:
         if (!m_extsRGB) {
-            synthesizeGLError(GraphicsContextGL::INVALID_ENUM, functionName, "invalid parameter name, EXT_sRGB not enabled");
+            synthesizeGLError(GraphicsContextGL::INVALID_ENUM, functionName, "invalid parameter name, EXT_sRGB not enabled"_s);
             return nullptr;
         }
         return m_context->getFramebufferAttachmentParameteri(target, attachment, pname);
     case GraphicsContextGL::FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE_EXT:
         if (!m_extColorBufferHalfFloat && !m_webglColorBufferFloat) {
-            synthesizeGLError(GraphicsContextGL::INVALID_ENUM, functionName, "invalid parameter name, EXT_color_buffer_half_float or WEBGL_color_buffer_float not enabled");
+            synthesizeGLError(GraphicsContextGL::INVALID_ENUM, functionName, "invalid parameter name, EXT_color_buffer_half_float or WEBGL_color_buffer_float not enabled"_s);
             return nullptr;
         }
         if (attachment == GraphicsContextGL::DEPTH_STENCIL_ATTACHMENT) {
-            synthesizeGLError(GraphicsContextGL::INVALID_OPERATION, functionName, "component type cannot be queried for DEPTH_STENCIL_ATTACHMENT");
+            synthesizeGLError(GraphicsContextGL::INVALID_OPERATION, functionName, "component type cannot be queried for DEPTH_STENCIL_ATTACHMENT"_s);
             return nullptr;
         }
         return m_context->getFramebufferAttachmentParameteri(target, attachment, pname);
     }
 
-    synthesizeGLError(GraphicsContextGL::INVALID_ENUM, functionName, "invalid parameter name");
+    synthesizeGLError(GraphicsContextGL::INVALID_ENUM, functionName, "invalid parameter name"_s);
     return nullptr;
 }
 
@@ -342,7 +342,7 @@ GCGLint WebGLRenderingContext::maxColorAttachments()
     return m_maxColorAttachments;
 }
 
-bool WebGLRenderingContext::validateBlendEquation(const char* functionName, GCGLenum mode)
+bool WebGLRenderingContext::validateBlendEquation(ASCIILiteral functionName, GCGLenum mode)
 {
     switch (mode) {
     case GraphicsContextGL::FUNC_ADD:
@@ -351,13 +351,13 @@ bool WebGLRenderingContext::validateBlendEquation(const char* functionName, GCGL
     case GraphicsContextGL::MIN_EXT:
     case GraphicsContextGL::MAX_EXT:
         if ((mode == GraphicsContextGL::MIN_EXT || mode == GraphicsContextGL::MAX_EXT) && !m_extBlendMinMax) {
-            synthesizeGLError(GraphicsContextGL::INVALID_ENUM, functionName, "invalid mode");
+            synthesizeGLError(GraphicsContextGL::INVALID_ENUM, functionName, "invalid mode"_s);
             return false;
         }
         return true;
         break;
     default:
-        synthesizeGLError(GraphicsContextGL::INVALID_ENUM, functionName, "invalid mode");
+        synthesizeGLError(GraphicsContextGL::INVALID_ENUM, functionName, "invalid mode"_s);
         return false;
     }
 }

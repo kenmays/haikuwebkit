@@ -143,6 +143,8 @@ public:
     static bool readLastBaseURLFromState(const String& filePath, URL& outLastBaseURL);
     static bool readDisplayNameFromState(const String& filePath, String& outDisplayName);
 
+    static bool isURLForAnyExtension(const URL&);
+
     static WebExtensionContext* get(WebExtensionContextIdentifier);
 
     explicit WebExtensionContext(Ref<WebExtension>&&);
@@ -433,6 +435,10 @@ public:
     WebExtensionCommand* command(const String& identifier);
     void performCommand(WebExtensionCommand&, UserTriggered = UserTriggered::No);
 
+#if TARGET_OS_IPHONE
+    WebExtensionCommand* commandMatchingKeyCommand(UIKeyCommand *);
+    bool performCommand(UIKeyCommand *);
+#endif
 #if USE(APPKIT)
     WebExtensionCommand* command(NSEvent *);
     bool performCommand(NSEvent *);
@@ -582,6 +588,8 @@ private:
     void saveBackgroundPageListenersToStorage();
 
     void performTasksAfterBackgroundContentLoads();
+
+    void reportWebViewConfigurationErrorIfNeeded(const WebExtensionTab&) const;
 
 #if ENABLE(INSPECTOR_EXTENSIONS)
     URL inspectorBackgroundPageURL() const;

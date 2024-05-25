@@ -1403,6 +1403,9 @@ static WKMediaPlaybackState toWKMediaPlaybackState(WebKit::MediaPlaybackState me
 - (void)setPageZoom:(CGFloat)pageZoom
 {
     THROW_IF_SUSPENDED;
+#if PLATFORM(MAC)
+    _impl->suppressContentRelativeChildViews(WebKit::WebViewImpl::ContentRelativeChildViewsSuppressionType::TemporarilyRemove);
+#endif
     _page->setPageZoomFactor(pageZoom);
 }
 
@@ -1785,13 +1788,36 @@ inline OptionSet<WebKit::FindOptions> toFindOptions(WKFindConfiguration *configu
 }
 #endif
 
+static inline WKTextIndicatorStyleType toWKTextIndicatorStyleType(WebKit::TextIndicatorStyle style)
+{
+    switch (style) {
+    case WebKit::TextIndicatorStyle::Initial:
+        return WKTextIndicatorStyleTypeInitial;
+    case WebKit::TextIndicatorStyle::Source:
+        return WKTextIndicatorStyleTypeSource;
+    case WebKit::TextIndicatorStyle::Final:
+        return WKTextIndicatorStyleTypeFinal;
+    }
+}
+
 #if ENABLE(UNIFIED_TEXT_REPLACEMENT)
-- (void)_removeTextIndicatorStyleForID:(NSUUID *)nsuuid
+- (void)_addTextIndicatorStyleForID:(NSUUID *)nsUUID withData:(const WebKit::TextIndicatorStyleData&)data
 {
 #if PLATFORM(IOS_FAMILY)
-    [_contentView removeTextIndicatorStyleForID:nsuuid];
+    [_contentView addTextIndicatorStyleForID:nsUUID withStyleType:toWKTextIndicatorStyleType(data.style)];
 #elif PLATFORM(MAC)
-    auto uuid = WTF::UUID::fromNSUUID(nsuuid);
+    auto uuid = WTF::UUID::fromNSUUID(nsUUID);
+    if (!uuid)
+        return;
+    _impl->addTextIndicatorStyleForID(*uuid, data);
+#endif
+}
+- (void)_removeTextIndicatorStyleForID:(NSUUID *)nsUUID
+{
+#if PLATFORM(IOS_FAMILY)
+    [_contentView removeTextIndicatorStyleForID:nsUUID];
+#elif PLATFORM(MAC)
+    auto uuid = WTF::UUID::fromNSUUID(nsUUID);
     if (!uuid)
         return;
     _impl->removeTextIndicatorStyleForID(*uuid);
@@ -1845,8 +1871,11 @@ inline OptionSet<WebKit::FindOptions> toFindOptions(WKFindConfiguration *configu
 - (void)createWebArchiveDataWithCompletionHandler:(void (^)(NSData *, NSError *))completionHandler
 {
     THROW_IF_SUSPENDED;
-    _page->getWebArchiveOfFrame(_page->mainFrame(), [completionHandler = makeBlockPtr(completionHandler)](API::Data* data) {
-        completionHandler(wrapper(data), nil);
+    _page->getWebArchiveOfFrame(nullptr, [completionHandler = makeBlockPtr(completionHandler)](API::Data* data) {
+        if (data)
+            completionHandler(wrapper(data), nil);
+        else
+            completionHandler(nil, [NSError errorWithDomain:WKErrorDomain code:WKErrorUnknown userInfo:nil]);
     });
 }
 
@@ -2032,6 +2061,12 @@ static _WKSelectionAttributes selectionAttributes(const WebKit::EditorState& edi
 
 #if USE(APPLE_INTERNAL_SDK)
 #import <WebKitAdditions/WKWebViewAdditionsAfter.mm>
+#endif
+
+#if ENABLE(GAMEPAD) && !__has_include(<WebKitAdditions/WKWebViewAdditionsAfter+Gamepad.mm>)
+- (void)_setGamepadsRecentlyAccessed:(BOOL)gamepadsRecentlyAccessed
+{
+}
 #endif
 
 @end
@@ -2795,7 +2830,7 @@ static void convertAndAddHighlight(Vector<Ref<WebCore::SharedMemory>>& buffers, 
 #if PLATFORM(IOS_FAMILY)
     [_contentView addTextIndicatorStyleForID:nsUUID.get() withStyleType:WKTextIndicatorStyleTypeInitial];
 #elif PLATFORM(MAC) && ENABLE(UNIFIED_TEXT_REPLACEMENT_UI)
-    _impl->addTextIndicatorStyleForID(*uuid, WKTextIndicatorStyleTypeInitial);
+    _impl->addTextIndicatorStyleForID(*uuid, { WebKit::TextIndicatorStyle::Initial, WTF::UUID(WTF::UUID::emptyValue) });
 #endif
     return nsUUID.get();
 #else // ENABLE(UNIFIED_TEXT_REPLACEMENT)
@@ -2817,7 +2852,7 @@ static void convertAndAddHighlight(Vector<Ref<WebCore::SharedMemory>>& buffers, 
 #if PLATFORM(IOS_FAMILY)
     [_contentView addTextIndicatorStyleForID:nsUUID.get() withStyleType:WKTextIndicatorStyleTypeFinal];
 #elif PLATFORM(MAC) && ENABLE(UNIFIED_TEXT_REPLACEMENT_UI)
-    _impl->addTextIndicatorStyleForID(*uuid, WKTextIndicatorStyleTypeFinal);
+    _impl->addTextIndicatorStyleForID(*uuid, { WebKit::TextIndicatorStyle::Final, WTF::UUID(WTF::UUID::emptyValue) });
 #endif
     return nsUUID.get();
 #else // ENABLE(UNIFIED_TEXT_REPLACEMENT)
@@ -2825,13 +2860,13 @@ static void convertAndAddHighlight(Vector<Ref<WebCore::SharedMemory>>& buffers, 
 #endif
 }
 
-- (void)_disableTextIndicatorStylingWithUUID:(NSUUID *)nsuuid
+- (void)_disableTextIndicatorStylingWithUUID:(NSUUID *)nsUUID
 {
 #if ENABLE(UNIFIED_TEXT_REPLACEMENT)
 #if PLATFORM(IOS_FAMILY)
-    [_contentView removeTextIndicatorStyleForID:nsuuid];
+    [_contentView removeTextIndicatorStyleForID:nsUUID];
 #elif PLATFORM(MAC) && ENABLE(UNIFIED_TEXT_REPLACEMENT_UI)
-    auto uuid = WTF::UUID::fromNSUUID(nsuuid);
+    auto uuid = WTF::UUID::fromNSUUID(nsUUID);
     if (!uuid)
         return;
     _impl->removeTextIndicatorStyleForID(*uuid);
@@ -2870,7 +2905,7 @@ static void convertAndAddHighlight(Vector<Ref<WebCore::SharedMemory>>& buffers, 
 - (WKNavigation *)_loadData:(NSData *)data MIMEType:(NSString *)MIMEType characterEncodingName:(NSString *)characterEncodingName baseURL:(NSURL *)baseURL userData:(id)userData
 {
     THROW_IF_SUSPENDED;
-    return wrapper(_page->loadData(span(data), MIMEType, characterEncodingName, baseURL.absoluteString, WebKit::ObjCObjectGraph::create(userData).ptr())).autorelease();
+    return wrapper(_page->loadData(span(data), MIMEType, characterEncodingName, baseURL.absoluteString, [userData isKindOfClass:NSData.class] ? API::Data::createWithoutCopying((NSData *)userData).ptr() : nullptr)).autorelease();
 }
 
 - (WKNavigation *)_loadRequest:(NSURLRequest *)request shouldOpenExternalURLs:(BOOL)shouldOpenExternalURLs
@@ -3718,6 +3753,9 @@ static inline OptionSet<WebCore::LayoutMilestone> layoutMilestones(_WKRenderingP
 - (void)_setTextZoomFactor:(double)zoomFactor
 {
     THROW_IF_SUSPENDED;
+#if PLATFORM(MAC)
+    _impl->suppressContentRelativeChildViews(WebKit::WebViewImpl::ContentRelativeChildViewsSuppressionType::TemporarilyRemove);
+#endif
     _page->setTextZoomFactor(zoomFactor);
 }
 
@@ -4378,6 +4416,15 @@ static Vector<Ref<API::TargetedElementInfo>> elementsFromWKElements(NSArray<_WKT
     _page->numberOfVisibilityAdjustmentRects([completion = makeBlockPtr(completion)](uint64_t count) {
         completion(static_cast<NSUInteger>(count));
     });
+}
+
+- (BOOL)_isUnifiedTextReplacementActive
+{
+#if ENABLE(UNIFIED_TEXT_REPLACEMENT)
+    return _page->isUnifiedTextReplacementActive();
+#else
+    return NO;
+#endif
 }
 
 @end

@@ -41,6 +41,7 @@
 #include "ScriptController.h"
 #include "ScriptableDocumentParser.h"
 #include "Settings.h"
+#include "TrustedType.h"
 #include <wtf/IsoMallocInlines.h>
 
 namespace WebCore {
@@ -119,12 +120,12 @@ void HTMLIFrameElement::attributeChanged(const QualifiedName& name, const AtomSt
     switch (name.nodeName()) {
     case AttributeNames::sandboxAttr: {
         if (m_sandbox)
-            m_sandbox->associatedAttributeValueChanged(newValue);
+            m_sandbox->associatedAttributeValueChanged();
 
         String invalidTokens;
         setSandboxFlags(newValue.isNull() ? SandboxNone : SecurityContext::parseSandboxPolicy(newValue, invalidTokens));
         if (!invalidTokens.isNull())
-            document().addConsoleMessage(MessageSource::Other, MessageLevel::Error, "Error while parsing the 'sandbox' attribute: " + invalidTokens);
+            document().addConsoleMessage(MessageSource::Other, MessageLevel::Error, makeString("Error while parsing the 'sandbox' attribute: "_s, invalidTokens));
         break;
     }
     case AttributeNames::allowAttr:
@@ -176,7 +177,7 @@ ReferrerPolicy HTMLIFrameElement::referrerPolicy() const
 const PermissionsPolicy& HTMLIFrameElement::permissionsPolicy() const
 {
     if (!m_permissionsPolicy)
-        m_permissionsPolicy = PermissionsPolicy::parse(document(), *this, attributeWithoutSynchronization(allowAttr));
+        m_permissionsPolicy = PermissionsPolicy::parse(document(), *this);
     return *m_permissionsPolicy;
 }
 
@@ -188,6 +189,22 @@ const AtomString& HTMLIFrameElement::loadingForBindings() const
 void HTMLIFrameElement::setLoadingForBindings(const AtomString& value)
 {
     setAttributeWithoutSynchronization(loadingAttr, value);
+}
+
+String HTMLIFrameElement::srcdoc() const
+{
+    return attributeWithoutSynchronization(srcdocAttr);
+}
+
+ExceptionOr<void> HTMLIFrameElement::setSrcdoc(std::variant<RefPtr<TrustedHTML>, String>&& value)
+{
+    auto stringValueHolder = trustedTypeCompliantString(*document().scriptExecutionContext(), WTFMove(value), "HTMLIFrameElement srcdoc"_s);
+
+    if (stringValueHolder.hasException())
+        return stringValueHolder.releaseException();
+
+    setAttributeWithoutSynchronization(srcdocAttr, AtomString { stringValueHolder.releaseReturnValue() });
+    return { };
 }
 
 static bool isFrameLazyLoadable(const Document& document, const URL& url, const AtomString& loadingAttributeValue)

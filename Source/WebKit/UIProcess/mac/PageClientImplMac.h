@@ -113,6 +113,7 @@ private:
     void clearSafeBrowsingWarning() override;
     void clearSafeBrowsingWarningIfForMainFrameNavigation() override;
     bool hasSafeBrowsingWarning() const override;
+    void didClearEditorStateAfterPageTransition() final { }
     
     bool showShareSheet(const WebCore::ShareDataWithParsedURL&, WTF::CompletionHandler<void(bool)>&&) override;
         
@@ -200,6 +201,8 @@ private:
     void didCommitLayerTree(const RemoteLayerTreeTransaction&) override;
     void layerTreeCommitComplete() override;
 
+    void scrollingNodeScrollViewDidScroll(WebCore::ScrollingNodeID) override;
+
     void registerInsertionUndoGrouping() override;
 
     void createPDFHUD(PDFPluginIdentifier, const WebCore::IntRect&) override;
@@ -228,6 +231,9 @@ private:
     void navigationGestureDidEnd() override;
     void willRecordNavigationSnapshot(WebBackForwardListItem&) override;
     void didRemoveNavigationGestureSnapshot() override;
+
+    void willBeginViewGesture() final;
+    void didEndViewGesture() final;
 
     void requestDOMPasteAccess(WebCore::DOMPasteAccessCategory, const WebCore::IntRect&, const String&, CompletionHandler<void(WebCore::DOMPasteAccessResponse)>&&) final;
 

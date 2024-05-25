@@ -92,6 +92,7 @@ WebFrameProxy::WebFrameProxy(WebPageProxy& page, FrameProcess& process, FrameIde
     : m_page(page)
     , m_frameProcess(process)
     , m_frameID(frameID)
+    , m_layerHostingContextIdentifier(LayerHostingContextIdentifier::generate())
 {
     ASSERT(!allFrames().contains(frameID));
     allFrames().set(frameID, *this);
@@ -122,9 +123,20 @@ RefPtr<WebPageProxy> WebFrameProxy::protectedPage() const
     return m_page.get();
 }
 
-std::unique_ptr<ProvisionalFrameProxy> WebFrameProxy::takeProvisionalFrame()
+RefPtr<ProvisionalFrameProxy> WebFrameProxy::takeProvisionalFrame()
 {
     return std::exchange(m_provisionalFrame, nullptr);
+}
+
+WebProcessProxy& WebFrameProxy::provisionalLoadProcess()
+{
+    if (m_provisionalFrame)
+        return m_provisionalFrame->process();
+    if (isMainFrame()) {
+        if (WeakPtr provisionalPage = m_page ? m_page->provisionalPageProxy() : nullptr)
+            return provisionalPage->process();
+    }
+    return process();
 }
 
 void WebFrameProxy::webProcessWillShutDown()
@@ -412,7 +424,7 @@ void WebFrameProxy::didCreateSubframe(WebCore::FrameIdentifier frameID, const St
     m_childFrames.add(WTFMove(child));
 }
 
-void WebFrameProxy::prepareForProvisionalNavigationInProcess(WebProcessProxy& process, const API::Navigation& navigation, BrowsingContextGroup& group, CompletionHandler<void()>&& completionHandler)
+void WebFrameProxy::prepareForProvisionalLoadInProcess(WebProcessProxy& process, API::Navigation& navigation, BrowsingContextGroup& group, CompletionHandler<void()>&& completionHandler)
 {
     if (isMainFrame())
         return completionHandler();
@@ -428,25 +440,26 @@ void WebFrameProxy::prepareForProvisionalNavigationInProcess(WebProcessProxy& pr
     RegistrableDomain navigationDomain(navigation.currentRequest().url());
     // addAllowedFirstPartyForCookies can be sync, but we need completionHander to be invoked after this function.
     auto aggregator = CallbackAggregator::create(WTFMove(completionHandler));
-    if (!m_provisionalFrame || navigation.currentRequestIsCrossSiteRedirect()) {
+    if (!m_provisionalFrame || m_provisionalFrame->process().coreProcessIdentifier() != process.coreProcessIdentifier() || navigation.currentRequestIsCrossSiteRedirect()) {
         RefPtr page = m_page.get();
         // FIXME: Main resource (of main or subframe) request redirects should go straight from the network to UI process so we don't need to make the processes for each domain in a redirect chain. <rdar://116202119>
         RegistrableDomain mainFrameDomain(page->mainFrame()->url());
 
-        m_provisionalFrame = makeUnique<ProvisionalFrameProxy>(*this, group.ensureProcessForDomain(navigationDomain, process, page->preferences()), navigation.currentRequestIsCrossSiteRedirect());
+        m_provisionalFrame = ProvisionalFrameProxy::create(*this, group.ensureProcessForDomain(navigationDomain, process, page->preferences()));
         page->websiteDataStore().protectedNetworkProcess()->addAllowedFirstPartyForCookies(process, mainFrameDomain, LoadedWebArchive::No, [aggregator] { });
     }
 
     if (this->process().processID() != process.processID())
-        process.send(Messages::WebPage::CreateProvisionalFrame({ m_provisionalFrame->layerHostingContextIdentifier() }, frameID()), page()->webPageIDInProcess(process));
+        process.send(Messages::WebPage::CreateProvisionalFrame({ m_layerHostingContextIdentifier }, frameID()), page()->webPageIDInProcess(process));
 }
 
 void WebFrameProxy::commitProvisionalFrame(FrameIdentifier frameID, FrameInfoData&& frameInfo, ResourceRequest&& request, uint64_t navigationID, const String& mimeType, bool frameHasCustomContentProvider, WebCore::FrameLoadType frameLoadType, const WebCore::CertificateInfo& certificateInfo, bool usedLegacyTLS, bool privateRelayed, bool containsPluginDocument, WebCore::HasInsecureContent hasInsecureContent, WebCore::MouseEventPolicy mouseEventPolicy, const UserData& userData)
 {
     ASSERT(m_page);
     if (m_provisionalFrame) {
-        protectedProcess()->send(Messages::WebPage::LoadDidCommitInAnotherProcess(frameID, m_provisionalFrame->layerHostingContextIdentifier()), m_page->webPageID());
-        m_frameProcess = std::exchange(m_provisionalFrame, nullptr)->takeFrameProcess();
+        protectedProcess()->send(Messages::WebPage::LoadDidCommitInAnotherProcess(frameID, m_layerHostingContextIdentifier), m_page->webPageID());
+        if (RefPtr process = std::exchange(m_provisionalFrame, nullptr)->takeFrameProcess())
+            m_frameProcess = process.releaseNonNull();
     }
     protectedPage()->didCommitLoadForFrame(frameID, WTFMove(frameInfo), WTFMove(request), navigationID, mimeType, frameHasCustomContentProvider, frameLoadType, certificateInfo, usedLegacyTLS, privateRelayed, containsPluginDocument, hasInsecureContent, mouseEventPolicy, userData);
 }

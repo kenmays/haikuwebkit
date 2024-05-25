@@ -101,14 +101,22 @@ enum class PlatformXR::XRTargetRayMode : uint8_t {
 };
 
 #if PLATFORM(COCOA)
+[Nested] struct PlatformXR::FrameData::RateMapDescription {
+    WebCore::IntSize screenSize;
+    std::array<std::span<const float>, 2> horizontalSamples;
+    std::span<const float> verticalSamples;
+};
+
 [Nested, RValue] struct PlatformXR::FrameData::LayerSetupData {
     std::array<std::array<uint16_t, 2>, 2> physicalSize;
     std::array<WebCore::IntRect, 2> viewports;
-    std::array<std::span<const float>, 2> horizontalSamples;
-    std::span<const float> verticalSamples;
-    WebCore::IntSize screenSize;
-    std::array<uint16_t, 2> framebufferSize;
+    PlatformXR::FrameData::RateMapDescription foveationRateMapDesc;
     MachSendRight completionSyncEvent;
+};
+
+[Nested, RValue] struct PlatformXR::FrameData::ExternalTexture {
+    MachSendRight handle;
+    bool isSharedTexture;
 };
 #endif
 
@@ -116,8 +124,8 @@ enum class PlatformXR::XRTargetRayMode : uint8_t {
 #if PLATFORM(COCOA)
     std::optional<PlatformXR::FrameData::LayerSetupData> layerSetup;
     uint64_t renderingFrameIndex;
-    std::tuple<MachSendRight, bool> colorTexture;
-    std::tuple<MachSendRight, bool> depthStencilBuffer;
+    PlatformXR::FrameData::ExternalTexture colorTexture;
+    PlatformXR::FrameData::ExternalTexture depthStencilBuffer;
 #else
     WebCore::IntSize framebufferSize;
     PlatformGLObject opaqueTexture;

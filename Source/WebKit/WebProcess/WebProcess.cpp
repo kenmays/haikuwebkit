@@ -70,6 +70,7 @@
 #include "WebPageCreationParameters.h"
 #include "WebPageGroupProxy.h"
 #include "WebPageInlines.h"
+#include "WebPageProxy.h"
 #include "WebPaymentCoordinator.h"
 #include "WebPermissionController.h"
 #include "WebPlatformStrategies.h"
@@ -117,6 +118,7 @@
 #include <WebCore/MemoryRelease.h>
 #include <WebCore/MessagePort.h>
 #include <WebCore/MockRealtimeMediaSourceCenter.h>
+#include <WebCore/NavigatorGamepad.h>
 #include <WebCore/NetworkStorageSession.h>
 #include <WebCore/Page.h>
 #include <WebCore/PageGroup.h>
@@ -360,6 +362,12 @@ WebProcess::~WebProcess()
 void WebProcess::initializeProcess(const AuxiliaryProcessInitializationParameters& parameters)
 {
     WTF::setProcessPrivileges({ });
+
+    {
+        JSC::Options::AllowUnfinalizedAccessScope scope;
+        JSC::Options::allowNonSPTagging() = false;
+        JSC::Options::notifyOptionsChanged();
+    }
 
     MessagePortChannelProvider::setSharedProvider(WebMessagePortChannelProvider::singleton());
     
@@ -628,6 +636,13 @@ void WebProcess::initializeWebProcess(WebProcessCreationParameters&& parameters)
 
     updateStorageAccessUserAgentStringQuirks(WTFMove(parameters.storageAccessUserAgentStringQuirksData));
     updateDomainsWithStorageAccessQuirks(WTFMove(parameters.storageAccessPromptQuirksDomains));
+
+#if ENABLE(GAMEPAD)
+    // Web processes need to periodically notify the UI process of gamepad access at least as frequently
+    // as the WebPageProxy::gamepadsRecentlyAccessedThreshold value.
+    // 3-times-as-often seems like it will guarantee proper behavior for almost all web pages.
+    WebCore::NavigatorGamepad::setGamepadsRecentlyAccessedThreshold(WebPageProxy::gamepadsRecentlyAccessedThreshold / 3);
+#endif
 
     WEBPROCESS_RELEASE_LOG(Process, "initializeWebProcess: Presenting processPID=%d", WebCore::presentingApplicationPID());
 }

@@ -628,6 +628,14 @@ Result<AST::Attribute::Ref> Parser<Lexer>::parseAttribute()
     START_PARSE();
 
     CONSUME_TYPE(Attribute);
+
+    if (current().type == TokenType::KeywordDiagnostic) {
+        consume();
+        PARSE(diagnostic, Diagnostic);
+        RETURN_ARENA_NODE(DiagnosticAttribute, WTFMove(diagnostic));
+    }
+
+
     CONSUME_TYPE_NAMED(ident, Identifier);
 
     if (ident.ident == "group"_s) {
@@ -770,11 +778,6 @@ Result<AST::Attribute::Ref> Parser<Lexer>::parseAttribute()
     if (ident.ident == "const"_s)
         RETURN_ARENA_NODE(ConstAttribute);
 
-    if (ident.ident == "diagnostic"_s) {
-        PARSE(diagnostic, Diagnostic);
-        RETURN_ARENA_NODE(DiagnosticAttribute, WTFMove(diagnostic));
-    }
-
     // https://gpuweb.github.io/gpuweb/wgsl/#pipeline-stage-attributes
     if (ident.ident == "vertex"_s)
         RETURN_ARENA_NODE(StageAttribute, ShaderStage::Vertex);
@@ -827,6 +830,11 @@ Result<AST::Structure::Ref> Parser<Lexer>::parseStructure(AST::Attribute::List&&
         if (!result.isNewEntry)
             FAIL(makeString("duplicate member '"_s, member.get().name(), "' in struct '"_s, name, '\''));
         members.append(member);
+
+        // https://www.w3.org/TR/WGSL/#limits
+        static constexpr unsigned maximumNumberOfStructMembers = 1023;
+        if (UNLIKELY(members.size() > maximumNumberOfStructMembers))
+            FAIL(makeString("struct cannot have more than "_s, String::number(maximumNumberOfStructMembers), " members"_s));
         if (current().type == TokenType::Comma)
             consume();
         else
@@ -1209,6 +1217,8 @@ Result<AST::CompoundStatement::Ref> Parser<Lexer>::parseCompoundStatement()
 {
     START_PARSE();
 
+    PARSE(attributes, Attributes);
+
     CONSUME_TYPE(BraceLeft);
 
     AST::Statement::List statements;
@@ -1224,7 +1234,7 @@ Result<AST::CompoundStatement::Ref> Parser<Lexer>::parseCompoundStatement()
 
     CONSUME_TYPE(BraceRight);
 
-    RETURN_ARENA_NODE(CompoundStatement, WTFMove(statements));
+    RETURN_ARENA_NODE(CompoundStatement, WTFMove(attributes), WTFMove(statements));
 }
 
 template<typename Lexer>

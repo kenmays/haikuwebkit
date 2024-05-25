@@ -114,6 +114,11 @@
     return _info->searchableText();
 }
 
+- (NSString *)screenReaderText
+{
+    return _info->screenReaderText();
+}
+
 - (_WKRectEdge)offsetEdges
 {
     _WKRectEdge edges = _WKRectEdgeNone;
@@ -148,6 +153,19 @@
     return _info->isNearbyTarget();
 }
 
+- (BOOL)isInVisibilityAdjustmentSubtree
+{
+    return _info->isInVisibilityAdjustmentSubtree();
+}
+
+- (NSSet<NSURL *> *)mediaAndLinkURLs
+{
+    RetainPtr result = adoptNS([NSMutableSet<NSURL *> new]);
+    for (auto& url : _info->mediaAndLinkURLs())
+        [result addObject:(NSURL *)url];
+    return result.autorelease();
+}
+
 - (BOOL)isPseudoElement
 {
     return _info->isPseudoElement();
@@ -161,6 +179,27 @@
 - (BOOL)hasAudibleMedia
 {
     return _info->hasAudibleMedia();
+}
+
+- (NSString *)debugDescription
+{
+    auto firstSelector = [&]() -> String {
+        auto& allSelectors = _info->selectors();
+        if (allSelectors.isEmpty())
+            return { };
+
+        if (allSelectors.last().isEmpty())
+            return { };
+
+        // Most relevant selector for the final target element (after all enclosing shadow
+        // roots have been resolved).
+        return allSelectors.last().first();
+    }();
+
+    auto bounds = _info->boundsInRootView();
+    return [NSString stringWithFormat:@"<%@ %p \"%@\" at {{%.0f,%.0f},{%.0f,%.0f}}>"
+        , self.class, self, (NSString *)firstSelector
+        , bounds.x(), bounds.y(), bounds.width(), bounds.height()];
 }
 
 @end

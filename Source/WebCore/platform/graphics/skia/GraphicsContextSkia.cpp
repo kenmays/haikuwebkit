@@ -45,7 +45,9 @@
 #include <skia/core/SkPoint3.h>
 #include <skia/core/SkRRect.h>
 #include <skia/core/SkRegion.h>
+IGNORE_CLANG_WARNINGS_BEGIN("cast-align")
 #include <skia/core/SkSurface.h>
+IGNORE_CLANG_WARNINGS_END
 #include <skia/core/SkTileMode.h>
 #include <skia/effects/SkImageFilters.h>
 #include <wtf/MathExtras.h>
@@ -476,6 +478,7 @@ SkPaint GraphicsContextSkia::createStrokePaint() const
     SkPaint paint;
     paint.setAntiAlias(shouldAntialias());
     paint.setStyle(SkPaint::kStroke_Style);
+    paint.setBlendMode(toSkiaBlendMode(compositeMode().operation, blendMode()));
     paint.setStrokeCap(m_skiaState.m_stroke.cap);
     paint.setStrokeJoin(m_skiaState.m_stroke.join);
     paint.setStrokeMiter(m_skiaState.m_stroke.miter);

@@ -508,12 +508,6 @@ void MediaPlayerPrivateRemote::seeked(MediaTimeUpdateData&& timeData)
     m_currentTimeEstimator.setTime(timeData);
     if (auto player = m_player.get())
         player->seeked(timeData.currentTime);
-#if ENABLE(MEDIA_SOURCE)
-    // This message may well have been handled by the MediaSource object before
-    // theis message, which would result in the wrong
-    if (RefPtr mediaSourcePrivate = m_mediaSourcePrivate)
-        return mediaSourcePrivate->seeked(timeData.currentTime);
-#endif
 }
 
 void MediaPlayerPrivateRemote::timeChanged(RemoteMediaPlayerState&& state, MediaTimeUpdateData&& timeData)
@@ -710,7 +704,7 @@ void MediaPlayerPrivateRemote::prepareForRendering()
     connection().send(Messages::RemoteMediaPlayerProxy::PrepareForRendering(), m_id);
 }
 
-void MediaPlayerPrivateRemote::setPageIsVisible(bool visible, String&& sceneIdentifier)
+void MediaPlayerPrivateRemote::setPageIsVisible(bool visible)
 {
     if (m_pageIsVisible == visible)
         return;
@@ -718,7 +712,7 @@ void MediaPlayerPrivateRemote::setPageIsVisible(bool visible, String&& sceneIden
     ALWAYS_LOG(LOGIDENTIFIER, visible);
 
     m_pageIsVisible = visible;
-    connection().send(Messages::RemoteMediaPlayerProxy::SetPageIsVisible(visible, WTFMove(sceneIdentifier)), m_id);
+    connection().send(Messages::RemoteMediaPlayerProxy::SetPageIsVisible(visible), m_id);
 }
 
 void MediaPlayerPrivateRemote::setShouldMaintainAspectRatio(bool maintainRatio)

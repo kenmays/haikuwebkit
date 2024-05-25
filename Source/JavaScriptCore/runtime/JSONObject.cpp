@@ -385,7 +385,7 @@ Stringifier::StringifyResult Stringifier::appendStringifiedValue(StringBuilder& 
     }
 
     if (value.isString()) {
-        String string = asString(value)->value(m_globalObject);
+        auto string = asString(value)->value(m_globalObject);
         RETURN_IF_EXCEPTION(scope, StringifyFailed);
         builder.appendQuotedJSONString(string);
         return StringifySucceeded;
@@ -1055,52 +1055,52 @@ void FastStringifier<CharType>::append(JSValue value)
 
     switch (cell.type()) {
     case StringType: {
-        auto& string = asString(&cell)->tryGetValue();
-        if (UNLIKELY(string.isNull())) {
+        auto string = asString(&cell)->tryGetValue();
+        if (UNLIKELY(string.data.isNull())) {
             recordFailure("String::tryGetValue"_s);
             return;
         }
 
         auto charactersCopySameType = [&](auto span, auto* cursor) ALWAYS_INLINE_LAMBDA {
-#if CPU(ARM64) || CPU(X86_64)
+#if (CPU(ARM64) || CPU(X86_64)) && COMPILER(CLANG)
             constexpr size_t stride = 16 / sizeof(CharType);
             if (span.size() >= stride) {
                 using UnsignedType = std::make_unsigned_t<CharType>;
-                using BulkType = decltype(WTF::loadBulk(static_cast<const UnsignedType*>(nullptr)));
-                constexpr auto quoteMask = WTF::splatBulk(static_cast<UnsignedType>('"'));
-                constexpr auto escapeMask = WTF::splatBulk(static_cast<UnsignedType>('\\'));
-                constexpr auto controlMask = WTF::splatBulk(static_cast<UnsignedType>(' '));
+                using BulkType = decltype(SIMD::load(static_cast<const UnsignedType*>(nullptr)));
+                constexpr auto quoteMask = SIMD::splat(static_cast<UnsignedType>('"'));
+                constexpr auto escapeMask = SIMD::splat(static_cast<UnsignedType>('\\'));
+                constexpr auto controlMask = SIMD::splat(static_cast<UnsignedType>(' '));
                 const auto* ptr = span.data();
                 const auto* end = ptr + span.size();
                 auto* cursorEnd = cursor + span.size();
                 BulkType accumulated { };
                 for (; ptr + (stride - 1) < end; ptr += stride, cursor += stride) {
-                    auto input = WTF::loadBulk(bitwise_cast<const UnsignedType*>(ptr));
-                    WTF::storeBulk(input, bitwise_cast<UnsignedType*>(cursor));
-                    auto quotes = WTF::equalBulk(input, quoteMask);
-                    auto escapes = WTF::equalBulk(input, escapeMask);
-                    auto controls = WTF::lessThanBulk(input, controlMask);
-                    accumulated = WTF::mergeBulk(accumulated, WTF::mergeBulk(quotes, WTF::mergeBulk(escapes, controls)));
+                    auto input = SIMD::load(bitwise_cast<const UnsignedType*>(ptr));
+                    SIMD::store(input, bitwise_cast<UnsignedType*>(cursor));
+                    auto quotes = SIMD::equal(input, quoteMask);
+                    auto escapes = SIMD::equal(input, escapeMask);
+                    auto controls = SIMD::lessThan(input, controlMask);
+                    accumulated = SIMD::merge(accumulated, SIMD::merge(quotes, SIMD::merge(escapes, controls)));
                     if constexpr (sizeof(CharType) != 1) {
-                        constexpr auto surrogateMask = WTF::splatBulk(static_cast<UnsignedType>(0xf800));
-                        constexpr auto surrogateCheckMask = WTF::splatBulk(static_cast<UnsignedType>(0xd800));
-                        accumulated = WTF::mergeBulk(accumulated, WTF::equalBulk(simde_vandq_u16(input, surrogateMask), surrogateCheckMask));
+                        constexpr auto surrogateMask = SIMD::splat(static_cast<UnsignedType>(0xf800));
+                        constexpr auto surrogateCheckMask = SIMD::splat(static_cast<UnsignedType>(0xd800));
+                        accumulated = SIMD::merge(accumulated, SIMD::equal(simde_vandq_u16(input, surrogateMask), surrogateCheckMask));
                     }
                 }
                 if (ptr < end) {
-                    auto input = WTF::loadBulk(bitwise_cast<const UnsignedType*>(end - stride));
-                    WTF::storeBulk(input, bitwise_cast<UnsignedType*>(cursorEnd - stride));
-                    auto quotes = WTF::equalBulk(input, quoteMask);
-                    auto escapes = WTF::equalBulk(input, escapeMask);
-                    auto controls = WTF::lessThanBulk(input, controlMask);
-                    accumulated = WTF::mergeBulk(accumulated, WTF::mergeBulk(quotes, WTF::mergeBulk(escapes, controls)));
+                    auto input = SIMD::load(bitwise_cast<const UnsignedType*>(end - stride));
+                    SIMD::store(input, bitwise_cast<UnsignedType*>(cursorEnd - stride));
+                    auto quotes = SIMD::equal(input, quoteMask);
+                    auto escapes = SIMD::equal(input, escapeMask);
+                    auto controls = SIMD::lessThan(input, controlMask);
+                    accumulated = SIMD::merge(accumulated, SIMD::merge(quotes, SIMD::merge(escapes, controls)));
                     if constexpr (sizeof(CharType) != 1) {
-                        constexpr auto surrogateMask = WTF::splatBulk(static_cast<UnsignedType>(0xf800));
-                        constexpr auto surrogateCheckMask = WTF::splatBulk(static_cast<UnsignedType>(0xd800));
-                        accumulated = WTF::mergeBulk(accumulated, WTF::equalBulk(simde_vandq_u16(input, surrogateMask), surrogateCheckMask));
+                        constexpr auto surrogateMask = SIMD::splat(static_cast<UnsignedType>(0xf800));
+                        constexpr auto surrogateCheckMask = SIMD::splat(static_cast<UnsignedType>(0xd800));
+                        accumulated = SIMD::merge(accumulated, SIMD::equal(simde_vandq_u16(input, surrogateMask), surrogateCheckMask));
                     }
                 }
-                return WTF::isNonZeroBulk(accumulated);
+                return SIMD::isNonZero(accumulated);
             }
 #endif
             for (auto character : span) {
@@ -1116,36 +1116,36 @@ void FastStringifier<CharType>::append(JSValue value)
         };
 
         auto charactersCopyUpconvert = [&](std::span<const LChar> span, UChar* cursor) ALWAYS_INLINE_LAMBDA {
-#if CPU(ARM64) || CPU(X86_64)
+#if (CPU(ARM64) || CPU(X86_64)) && COMPILER(CLANG)
             constexpr size_t stride = 16 / sizeof(LChar);
             if (span.size() >= stride) {
                 using UnsignedType = std::make_unsigned_t<LChar>;
-                using BulkType = decltype(WTF::loadBulk(static_cast<const UnsignedType*>(nullptr)));
-                constexpr auto quoteMask = WTF::splatBulk(static_cast<UnsignedType>('"'));
-                constexpr auto escapeMask = WTF::splatBulk(static_cast<UnsignedType>('\\'));
-                constexpr auto controlMask = WTF::splatBulk(static_cast<UnsignedType>(' '));
-                constexpr auto zeros = WTF::splatBulk(static_cast<UnsignedType>(0));
+                using BulkType = decltype(SIMD::load(static_cast<const UnsignedType*>(nullptr)));
+                constexpr auto quoteMask = SIMD::splat(static_cast<UnsignedType>('"'));
+                constexpr auto escapeMask = SIMD::splat(static_cast<UnsignedType>('\\'));
+                constexpr auto controlMask = SIMD::splat(static_cast<UnsignedType>(' '));
+                constexpr auto zeros = SIMD::splat(static_cast<UnsignedType>(0));
                 const auto* ptr = span.data();
                 const auto* end = ptr + span.size();
                 auto* cursorEnd = cursor + span.size();
                 BulkType accumulated { };
                 for (; ptr + (stride - 1) < end; ptr += stride, cursor += stride) {
-                    auto input = WTF::loadBulk(bitwise_cast<const UnsignedType*>(ptr));
+                    auto input = SIMD::load(bitwise_cast<const UnsignedType*>(ptr));
                     simde_vst2q_u8(bitwise_cast<UnsignedType*>(cursor), (simde_uint8x16x2_t { input, zeros }));
-                    auto quotes = WTF::equalBulk(input, quoteMask);
-                    auto escapes = WTF::equalBulk(input, escapeMask);
-                    auto controls = WTF::lessThanBulk(input, controlMask);
-                    accumulated = WTF::mergeBulk(accumulated, WTF::mergeBulk(quotes, WTF::mergeBulk(escapes, controls)));
+                    auto quotes = SIMD::equal(input, quoteMask);
+                    auto escapes = SIMD::equal(input, escapeMask);
+                    auto controls = SIMD::lessThan(input, controlMask);
+                    accumulated = SIMD::merge(accumulated, SIMD::merge(quotes, SIMD::merge(escapes, controls)));
                 }
                 if (ptr < end) {
-                    auto input = WTF::loadBulk(bitwise_cast<const UnsignedType*>(end - stride));
+                    auto input = SIMD::load(bitwise_cast<const UnsignedType*>(end - stride));
                     simde_vst2q_u8(bitwise_cast<UnsignedType*>(cursorEnd - stride), (simde_uint8x16x2_t { input, zeros }));
-                    auto quotes = WTF::equalBulk(input, quoteMask);
-                    auto escapes = WTF::equalBulk(input, escapeMask);
-                    auto controls = WTF::lessThanBulk(input, controlMask);
-                    accumulated = WTF::mergeBulk(accumulated, WTF::mergeBulk(quotes, WTF::mergeBulk(escapes, controls)));
+                    auto quotes = SIMD::equal(input, quoteMask);
+                    auto escapes = SIMD::equal(input, escapeMask);
+                    auto controls = SIMD::lessThan(input, controlMask);
+                    accumulated = SIMD::merge(accumulated, SIMD::merge(quotes, SIMD::merge(escapes, controls)));
                 }
-                return WTF::isNonZeroBulk(accumulated);
+                return SIMD::isNonZero(accumulated);
             }
 #endif
             for (auto character : span) {
@@ -1157,37 +1157,37 @@ void FastStringifier<CharType>::append(JSValue value)
         };
 
         if constexpr (sizeof(CharType) == 1) {
-            if (UNLIKELY(!string.is8Bit())) {
+            if (UNLIKELY(!string.data.is8Bit())) {
                 m_retryWith16BitFastStringifier = m_length < (m_capacity / 2);
                 recordFailure("16-bit string"_s);
                 return;
             }
-            auto stringLength = string.length();
+            auto stringLength = string.data.length();
             if (UNLIKELY(!hasRemainingCapacity(1 + stringLength + 1))) {
                 recordBufferFull();
                 return;
             }
             m_buffer[m_length] = '"';
-            if (UNLIKELY(charactersCopySameType(string.span8(), m_buffer + m_length + 1))) {
+            if (UNLIKELY(charactersCopySameType(string.data.span8(), m_buffer + m_length + 1))) {
                 recordFailure("string character needs escaping"_s);
                 return;
             }
             m_buffer[m_length + 1 + stringLength] = '"';
             m_length += 1 + stringLength + 1;
         } else {
-            auto stringLength = string.length();
+            auto stringLength = string.data.length();
             if (UNLIKELY(!hasRemainingCapacity(1 + stringLength + 1))) {
                 recordBufferFull();
                 return;
             }
             m_buffer[m_length] = '"';
-            if (string.is8Bit()) {
-                if (UNLIKELY(charactersCopyUpconvert(string.span8(), m_buffer + m_length + 1))) {
+            if (string.data.is8Bit()) {
+                if (UNLIKELY(charactersCopyUpconvert(string.data.span8(), m_buffer + m_length + 1))) {
                     recordFailure("string character needs escaping"_s);
                     return;
                 }
             } else {
-                if (UNLIKELY(charactersCopySameType(string.span16(), m_buffer + m_length + 1))) {
+                if (UNLIKELY(charactersCopySameType(string.data.span16(), m_buffer + m_length + 1))) {
                     recordFailure("string character needs escaping or surrogate pair handling"_s);
                     return;
                 }
@@ -1595,13 +1595,12 @@ JSC_DEFINE_HOST_FUNCTION(jsonProtoFuncParse, (JSGlobalObject* globalObject, Call
     auto scope = DECLARE_THROW_SCOPE(vm);
     auto* string = callFrame->argument(0).toString(globalObject);
     RETURN_IF_EXCEPTION(scope, { });
-    auto viewWithString = string->viewWithUnderlyingString(globalObject);
+    auto view = string->view(globalObject);
     RETURN_IF_EXCEPTION(scope, { });
-    StringView view = viewWithString.view;
 
     JSValue unfiltered;
-    if (view.is8Bit()) {
-        LiteralParser jsonParser(globalObject, view.span8(), StrictJSON);
+    if (view->is8Bit()) {
+        LiteralParser jsonParser(globalObject, view->span8(), StrictJSON);
         unfiltered = jsonParser.tryLiteralParse();
         EXCEPTION_ASSERT(!scope.exception() || !unfiltered);
         if (!unfiltered) {
@@ -1609,7 +1608,7 @@ JSC_DEFINE_HOST_FUNCTION(jsonProtoFuncParse, (JSGlobalObject* globalObject, Call
             return throwVMError(globalObject, scope, createSyntaxError(globalObject, jsonParser.getErrorMessage()));
         }
     } else {
-        LiteralParser jsonParser(globalObject, view.span16(), StrictJSON);
+        LiteralParser jsonParser(globalObject, view->span16(), StrictJSON);
         unfiltered = jsonParser.tryLiteralParse();
         EXCEPTION_ASSERT(!scope.exception() || !unfiltered);
         if (!unfiltered) {

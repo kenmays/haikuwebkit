@@ -32,6 +32,7 @@
 #import "WKSafeBrowsingWarning.h"
 #import "WKTextFinderClient.h"
 #import "WKTextIndicatorStyleType.h"
+#import "WKWebViewConfigurationPrivate.h"
 #import <WebKit/WKUIDelegatePrivate.h>
 #import "WebBackForwardList.h"
 #import "WebFrameProxy.h"
@@ -1233,6 +1234,13 @@ ALLOW_DEPRECATED_DECLARATIONS_END
 - (void)_web_didChangeContentSize:(NSSize)newSize
 {
 }
+
+#if ENABLE(UNIFIED_TEXT_REPLACEMENT)
+- (BOOL)_web_wantsCompleteUnifiedTextReplacementBehavior
+{
+    return [self _wantsCompleteUnifiedTextReplacementBehavior];
+}
+#endif
 
 #if ENABLE(DRAG_SUPPORT)
 

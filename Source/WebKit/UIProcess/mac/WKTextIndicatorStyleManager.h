@@ -29,7 +29,7 @@
 
 #if ENABLE(UNIFIED_TEXT_REPLACEMENT)
 
-#import "WKTextIndicatorStyleType.h"
+#import "TextIndicatorStyle.h"
 
 namespace WebKit {
 class WebViewImpl;
@@ -40,8 +40,13 @@ class WebViewImpl;
 + (BOOL)supportsTextIndicatorStyle;
 
 - (instancetype)initWithWebViewImpl:(WebKit::WebViewImpl&)view;
-- (void)addTextIndicatorStyleForID:(NSUUID *)uuid withStyleType:(WKTextIndicatorStyleType)styleType;
+- (void)addTextIndicatorStyleForID:(NSUUID *)uuid withData:(const WebKit::TextIndicatorStyleData&)data;
 - (void)removeTextIndicatorStyleForID:(NSUUID *)uuid;
+
+- (BOOL)hasActiveTextIndicatorStyle;
+
+- (void)suppressTextIndicatorStyle;
+- (void)restoreTextIndicatorStyle;
 
 @end
 

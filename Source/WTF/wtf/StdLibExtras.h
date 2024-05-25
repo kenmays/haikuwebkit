@@ -59,11 +59,22 @@
 #define DEFINE_DEBUG_ONLY_GLOBAL(type, name, arguments)
 #endif // NDEBUG
 
-// OBJECT_OFFSETOF: Like the C++ offsetof macro, but you can use it with classes.
+#if COMPILER(CLANG)
+// We have to use __builtin_offsetof directly here instead of offsetof because otherwise Clang will drop
+// our pragma and we'll still get the warning.
+#define OBJECT_OFFSETOF(class, field) \
+    _Pragma("clang diagnostic push") \
+    _Pragma("clang diagnostic ignored \"-Winvalid-offsetof\"") \
+    __builtin_offsetof(class, field) \
+    _Pragma("clang diagnostic pop")
+#elif COMPILER(GCC)
+// It would be nice to silence this warning locally like we do on Clang but GCC complains about `error: ‘#pragma’ is not allowed here`
+#pragma GCC diagnostic ignored "-Winvalid-offsetof"
+#define OBJECT_OFFSETOF(class, field) offsetof(class, field)
+#endif
+
 // The magic number 0x4000 is insignificant. We use it to avoid using NULL, since
 // NULL can cause compiler problems, especially in cases of multiple inheritance.
-#define OBJECT_OFFSETOF(class, field) (reinterpret_cast<ptrdiff_t>(&(reinterpret_cast<class*>(0x4000)->field)) - 0x4000)
-
 #define CAST_OFFSET(from, to) (reinterpret_cast<uintptr_t>(static_cast<to>((reinterpret_cast<from>(0x4000)))) - 0x4000)
 
 // STRINGIZE: Can convert any value to quoted string, even expandable macros
@@ -85,7 +96,7 @@
  * - https://bugs.webkit.org/show_bug.cgi?id=38045
  * - http://gcc.gnu.org/bugzilla/show_bug.cgi?id=43976
  */
-#if (CPU(ARM) || CPU(MIPS) || CPU(RISCV64)) && COMPILER(GCC_COMPATIBLE)
+#if CPU(ARM) || CPU(MIPS) || CPU(RISCV64)
 template<typename Type>
 inline bool isPointerTypeAlignmentOkay(Type* ptr)
 {
@@ -386,7 +397,7 @@ bool findBitInWord(T word, size_t& startOrResultIndex, size_t endIndex, bool val
     size_t index = startOrResultIndex;
     word >>= index;
 
-#if COMPILER(GCC_COMPATIBLE) && (CPU(X86_64) || CPU(ARM64))
+#if CPU(X86_64) || CPU(ARM64)
     // We should only use ctz() when we know that ctz() is implementated using
     // a fast hardware instruction. Otherwise, this will actually result in
     // worse performance.

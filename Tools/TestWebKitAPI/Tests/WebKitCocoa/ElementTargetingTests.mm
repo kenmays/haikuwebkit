@@ -39,6 +39,7 @@
 
 - (NSArray<_WKTargetedElementInfo *> *)targetedElementInfoAt:(CGPoint)point;
 - (NSArray<_WKTargetedElementInfo *> *)targetedElementInfoWithText:(NSString *)searchText;
+- (NSArray<_WKTargetedElementInfo *> *)targetedElementInfoWithSelectors:(NSArray<NSSet<NSString *> *> *)selectors;
 - (BOOL)adjustVisibilityForTargets:(NSArray<_WKTargetedElementInfo *> *)targets;
 - (BOOL)resetVisibilityAdjustmentsForTargets:(NSArray<_WKTargetedElementInfo *> *)elements;
 - (void)expectSingleTargetedSelector:(NSString *)expectedSelector at:(CGPoint)point;
@@ -70,6 +71,12 @@
 - (NSArray<_WKTargetedElementInfo *> *)targetedElementInfoWithText:(NSString *)searchText
 {
     auto request = adoptNS([[_WKTargetedElementRequest alloc] initWithSearchText:searchText]);
+    return [self targetedElementInfo:request.get()];
+}
+
+- (NSArray<_WKTargetedElementInfo *> *)targetedElementInfoWithSelectors:(NSArray<NSSet<NSString *> *> *)selectors
+{
+    auto request = adoptNS([[_WKTargetedElementRequest alloc] initWithSelectors:selectors]);
     return [self targetedElementInfo:request.get()];
 }
 
@@ -338,6 +345,43 @@ TEST(ElementTargeting, AdjustVisibilityFromSelectors)
     }
 }
 
+TEST(ElementTargeting, RequestElementsFromSelectors)
+{
+    auto webView = adoptNS([[TestWKWebView alloc] initWithFrame:CGRectMake(0, 0, 600, 480)]);
+
+    RetainPtr preferences = adoptNS([WKWebpagePreferences new]);
+    [preferences _setVisibilityAdjustmentSelectors:[NSSet setWithObjects:
+        @".fixed.container"
+        , @"DIV.absolute.bottom-right"
+        , @"DIV.absolute.bottom-left"
+        , @"DIV.absolute.top-right"
+        , nil]];
+
+    RetainPtr delegate = adoptNS([TestUIDelegate new]);
+    __block bool didAdjustVisibility = false;
+    [delegate setWebViewDidAdjustVisibilityWithSelectors:^(WKWebView *, NSArray<NSString *> *selectors) {
+        didAdjustVisibility = true;
+    }];
+    [webView setUIDelegate:delegate.get()];
+    [webView synchronouslyLoadTestPageNamed:@"element-targeting-2" preferences:preferences.get()];
+    Util::run(&didAdjustVisibility);
+
+    RetainPtr targets = [webView targetedElementInfoWithSelectors:@[
+        [NSSet setWithObjects:@"DIV.absolute.bottom-right", @"#no-match", @".also-no-match", nil]
+    ]];
+
+    RetainPtr target = [targets firstObject];
+    EXPECT_EQ(1U, [targets count]);
+    EXPECT_WK_STREQ("DIV.absolute.bottom-right", [target selectorsIncludingShadowHosts].firstObject.firstObject);
+    EXPECT_TRUE([target isInVisibilityAdjustmentSubtree]);
+
+    didAdjustVisibility = false;
+
+    [webView resetVisibilityAdjustmentsForTargets:targets.get()];
+    [webView waitForNextPresentationUpdate];
+    EXPECT_FALSE(didAdjustVisibility);
+}
+
 TEST(ElementTargeting, AdjustVisibilityFromPseudoSelectors)
 {
     auto webViewFrame = CGRectMake(0, 0, 800, 600);
@@ -475,9 +519,42 @@ TEST(ElementTargeting, RequestTargetedElementsBySearchableText)
     NSString *searchableText = [targetFromHitTest searchableText];
     EXPECT_GT(searchableText.length, 0U);
     EXPECT_TRUE([@"Image of a sunset over the 4th floor of Infinite Loop 2" containsString:searchableText]);
+    EXPECT_WK_STREQ("sunset-in-cupertino-200px.png", [[[targetFromHitTest mediaAndLinkURLs] anyObject] lastPathComponent]);
 
     RetainPtr targetFromSearchText = [[webView targetedElementInfoWithText:searchableText] firstObject];
     EXPECT_TRUE([targetFromSearchText isSameElement:targetFromHitTest.get()]);
+    EXPECT_WK_STREQ("sunset-in-cupertino-200px.png", [[[targetFromSearchText mediaAndLinkURLs] anyObject] lastPathComponent]);
+}
+
+TEST(ElementTargeting, AdjustVisibilityAfterRecreatingElement)
+{
+    auto webView = adoptNS([[TestWKWebView alloc] initWithFrame:CGRectMake(0, 0, 800, 600)]);
+
+    RetainPtr delegate = adoptNS([TestUIDelegate new]);
+    [webView setUIDelegate:delegate.get()];
+    [webView synchronouslyLoadTestPageNamed:@"element-targeting-7"];
+
+    RetainPtr firstTarget = [[webView targetedElementInfoAt:CGPointMake(100, 100)] firstObject];
+    [webView adjustVisibilityForTargets:@[ firstTarget.get() ]];
+
+    __block bool didAdjustment = false;
+    [delegate setWebViewDidAdjustVisibilityWithSelectors:^(WKWebView *, NSArray<NSString *> *selectors) {
+        didAdjustment = true;
+    }];
+
+    [webView objectByEvaluatingJavaScript:@"recreateContainer()"];
+
+    Util::run(&didAdjustment);
+}
+
+TEST(ElementTargeting, TargetedElementScreenReaderText)
+{
+    auto webView = adoptNS([[TestWKWebView alloc] initWithFrame:CGRectMake(0, 0, 800, 600)]);
+    [webView synchronouslyLoadTestPageNamed:@"element-targeting-7"];
+    RetainPtr element = [[webView targetedElementInfoAt:CGPointMake(100, 100)] firstObject];
+
+    EXPECT_TRUE([[element renderedText] containsString:@"{200,100}"]);
+    EXPECT_FALSE([[element screenReaderText] containsString:@"{200,100}"]);
 }
 
 } // namespace TestWebKitAPI

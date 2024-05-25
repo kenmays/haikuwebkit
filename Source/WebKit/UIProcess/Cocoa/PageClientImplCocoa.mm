@@ -26,6 +26,8 @@
 #import "config.h"
 #import "PageClientImplCocoa.h"
 
+#import "TextIndicatorStyle.h"
+#import "WKTextIndicatorStyleType.h"
 #import "WKWebViewInternal.h"
 #import <WebCore/AlternativeTextUIController.h>
 #import <WebKit/WKWebViewConfigurationPrivate.h>
@@ -155,6 +157,11 @@ void PageClientImplCocoa::storeAppHighlight(const WebCore::AppHighlight &highlig
 #endif // ENABLE(APP_HIGHLIGHTS)
 
 #if ENABLE(UNIFIED_TEXT_REPLACEMENT)
+void PageClientImplCocoa::addTextIndicatorStyleForID(const WTF::UUID& uuid, const WebKit::TextIndicatorStyleData& data)
+{
+    [m_webView _addTextIndicatorStyleForID:uuid withData:data];
+}
+
 void PageClientImplCocoa::removeTextIndicatorStyleForID(const WTF::UUID& uuid)
 {
     [m_webView _removeTextIndicatorStyleForID:uuid];
@@ -288,6 +295,23 @@ void PageClientImplCocoa::textReplacementSessionShowInformationForReplacementWit
 void PageClientImplCocoa::textReplacementSessionUpdateStateForReplacementWithUUID(const WTF::UUID& sessionUUID, WebTextReplacementDataState state, const WTF::UUID& replacementUUID)
 {
     [m_webView _textReplacementSession:sessionUUID updateState:state forReplacementWithUUID:replacementUUID];
+}
+
+void PageClientImplCocoa::unifiedTextReplacementActiveWillChange()
+{
+    [m_webView willChangeValueForKey:unifiedTextReplacementActiveKey];
+}
+
+void PageClientImplCocoa::unifiedTextReplacementActiveDidChange()
+{
+    [m_webView didChangeValueForKey:unifiedTextReplacementActiveKey];
+}
+#endif
+
+#if ENABLE(GAMEPAD)
+void PageClientImplCocoa::setGamepadsRecentlyAccessed(GamepadsRecentlyAccessed gamepadsRecentlyAccessed)
+{
+    [m_webView _setGamepadsRecentlyAccessed:(gamepadsRecentlyAccessed == GamepadsRecentlyAccessed::No) ? NO : YES];
 }
 #endif
 

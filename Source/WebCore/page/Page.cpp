@@ -21,6 +21,7 @@
 #include "Page.h"
 
 #include "ActivityStateChangeObserver.h"
+#include "AdvancedPrivacyProtections.h"
 #include "AlternativeTextClient.h"
 #include "AnimationFrameRate.h"
 #include "AppHighlightStorage.h"
@@ -106,6 +107,7 @@
 #include "ModelPlayerProvider.h"
 #include "NavigationScheduler.h"
 #include "Navigator.h"
+#include "NavigatorGamepad.h"
 #include "OpportunisticTaskScheduler.h"
 #include "PageColorSampler.h"
 #include "PageConfiguration.h"
@@ -213,8 +215,9 @@
 #include "AccessibilityRootAtspi.h"
 #endif
 
-#if PLATFORM(IOS_FAMILY) && ENABLE(WEBXR)
+#if ENABLE(WEBXR)
 #include "NavigatorWebXR.h"
+#include "WebXRSession.h"
 #include "WebXRSystem.h"
 #endif
 
@@ -290,7 +293,14 @@ static constexpr OptionSet<ActivityState> pageInitialActivityState()
     return { ActivityState::IsVisible, ActivityState::IsInWindow };
 }
 
-static Ref<Frame> createMainFrame(Page& page, PageConfiguration::ClientCreatorForMainFrame&& clientCreator, RefPtr<Frame> mainFrameOpener, FrameIdentifier identifier)
+// FIXME: workaround for GCC bug https://gcc.gnu.org/bugzilla/show_bug.cgi?id=115135
+#if COMPILER(GCC) && CPU(ARM64)
+#define GCC_MAYBE_NO_INLINE NEVER_INLINE
+#else
+#define GCC_MAYBE_NO_INLINE
+#endif
+
+GCC_MAYBE_NO_INLINE static Ref<Frame> createMainFrame(Page& page, PageConfiguration::ClientCreatorForMainFrame&& clientCreator, RefPtr<Frame> mainFrameOpener, FrameIdentifier identifier)
 {
     page.relaxAdoptionRequirement();
     return switchOn(WTFMove(clientCreator), [&] (CompletionHandler<UniqueRef<LocalFrameLoaderClient>(LocalFrame&)>&& localFrameClientCreator) -> Ref<Frame> {
@@ -451,7 +461,6 @@ Page::~Page()
     m_validationMessageClient = nullptr;
     m_diagnosticLoggingClient = nullptr;
     m_performanceLoggingClient = nullptr;
-    m_rootFrames.clear();
     if (RefPtr localMainFrame = dynamicDowncast<LocalFrame>(m_mainFrame))
         localMainFrame->setView(nullptr);
     setGroupName(String());
@@ -467,6 +476,7 @@ Page::~Page()
         frame.willDetachPage();
         frame.detachFromPage();
     });
+    ASSERT(m_rootFrames.isEmpty());
 
     if (RefPtr scrollingCoordinator = m_scrollingCoordinator)
         scrollingCoordinator->pageDestroyed();
@@ -750,16 +760,18 @@ void Page::setOpenedByDOM()
     m_openedByDOM = true;
 }
 
-void Page::goToItem(LocalFrame& localMainFrame, HistoryItem& item, FrameLoadType type, ShouldTreatAsContinuingLoad shouldTreatAsContinuingLoad)
+void Page::goToItem(Frame& mainFrame, HistoryItem& item, FrameLoadType type, ShouldTreatAsContinuingLoad shouldTreatAsContinuingLoad)
 {
     // stopAllLoaders may end up running onload handlers, which could cause further history traversals that may lead to the passed in HistoryItem
     // being deref()-ed. Make sure we can still use it with HistoryController::goToItem later.
     Ref protectedItem { item };
 
-    ASSERT(localMainFrame.isMainFrame());
-    if (localMainFrame.checkedHistory()->shouldStopLoadingForHistoryItem(item))
-        localMainFrame.checkedLoader()->stopAllLoadersAndCheckCompleteness();
-    localMainFrame.checkedHistory()->goToItem(item, type, shouldTreatAsContinuingLoad);
+    ASSERT(mainFrame.isMainFrame());
+    if (RefPtr localMainFrame = dynamicDowncast<LocalFrame>(mainFrame)) {
+        if (localMainFrame->checkedHistory()->shouldStopLoadingForHistoryItem(item))
+            localMainFrame->checkedLoader()->stopAllLoadersAndCheckCompleteness();
+    }
+    mainFrame.checkedHistory()->goToItem(item, type, shouldTreatAsContinuingLoad);
 }
 
 void Page::setGroupName(const String& name)
@@ -1347,7 +1359,7 @@ void Page::logMediaDiagnosticMessage(const RefPtr<FormData>& formData) const
     unsigned imageOrMediaFilesCount = formData ? formData->imageOrMediaFilesCount() : 0;
     if (!imageOrMediaFilesCount)
         return;
-    auto message = makeString(imageOrMediaFilesCount, imageOrMediaFilesCount == 1 ? " media file has been submitted" : " media files have been submitted");
+    auto message = makeString(imageOrMediaFilesCount, imageOrMediaFilesCount == 1 ? " media file has been submitted"_s : " media files have been submitted"_s);
     diagnosticLoggingClient().logDiagnosticMessageWithDomain(message, DiagnosticLoggingDomain::Media);
 }
 
@@ -2714,20 +2726,6 @@ void Page::setMuted(MediaProducerMutedStateFlags muted)
     });
 }
 
-bool Page::shouldBlockLayerTreeFreezingForVideo()
-{
-    bool shouldBlockLayerTreeFreezingForVideo = false;
-    forEachMediaElement([&shouldBlockLayerTreeFreezingForVideo] (HTMLMediaElement& element) {
-        // FIXME: Consider only returning true when `element.readyState >=
-        // HTMLMediaElementEnums::HAVE_METADATA` and forcing an update to the layer tree
-        // freeze state when an element's readyState gets to HAVE_METADATA in
-        // `HTMLMediaElement::setReadyState`
-        if (element.isVideo())
-            shouldBlockLayerTreeFreezingForVideo = true;
-    });
-    return shouldBlockLayerTreeFreezingForVideo;
-}
-
 void Page::stopMediaCapture(MediaProducerMediaCaptureKind kind)
 {
     UNUSED_PARAM(kind);
@@ -4061,11 +4059,21 @@ void Page::applicationWillResignActive()
 void Page::applicationDidEnterBackground()
 {
     m_webRTCProvider->setActive(false);
+
+#if ENABLE(WEBXR)
+    if (auto session = this->activeImmersiveXRSession())
+        session->applicationDidEnterBackground();
+#endif
 }
 
 void Page::applicationWillEnterForeground()
 {
     m_webRTCProvider->setActive(true);
+
+#if ENABLE(WEBXR)
+    if (auto session = this->activeImmersiveXRSession())
+        session->applicationWillEnterForeground();
+#endif
 }
 
 void Page::applicationDidBecomeActive()
@@ -4539,7 +4547,7 @@ ModelPlayerProvider& Page::modelPlayerProvider()
     return m_modelPlayerProvider.get();
 }
 
-void Page::setupForRemoteWorker(const URL& scriptURL, const SecurityOriginData& topOrigin, const String& referrerPolicy)
+void Page::setupForRemoteWorker(const URL& scriptURL, const SecurityOriginData& topOrigin, const String& referrerPolicy, OptionSet<AdvancedPrivacyProtections> advancedPrivacyProtections)
 {
     RefPtr localMainFrame = dynamicDowncast<LocalFrame>(mainFrame());
     if (!localMainFrame)
@@ -4554,6 +4562,9 @@ void Page::setupForRemoteWorker(const URL& scriptURL, const SecurityOriginData& 
     URL originAsURL = origin->toURL();
     document->setSiteForCookies(originAsURL);
     document->setFirstPartyForCookies(originAsURL);
+
+    if (RefPtr documentLoader = localMainFrame->checkedLoader()->documentLoader())
+        documentLoader->setAdvancedPrivacyProtections(advancedPrivacyProtections);
 
     if (document->settings().storageBlockingPolicy() != StorageBlockingPolicy::BlockThirdParty)
         document->setDomainForCachePartition(String { emptyString() });
@@ -4766,8 +4777,15 @@ void Page::setAccessibilityRootObject(AccessibilityRootAtspi* rootObject)
 }
 #endif // USE(ATSPI)
 
-#if PLATFORM(IOS_FAMILY) && ENABLE(WEBXR)
+#if ENABLE(WEBXR)
+#if PLATFORM(IOS_FAMILY)
 bool Page::hasActiveImmersiveSession() const
+{
+    return !!activeImmersiveXRSession();
+}
+#endif // PLATFORM(IOS_FAMILY)
+
+RefPtr<WebXRSession> Page::activeImmersiveXRSession() const
 {
     for (RefPtr frame = &m_mainFrame.get(); frame; frame = frame->tree().traverseNext()) {
         RefPtr localFrame = dynamicDowncast<LocalFrame>(frame);
@@ -4779,13 +4797,13 @@ bool Page::hasActiveImmersiveSession() const
         if (!navigator)
             continue;
 
-        auto* xrSystem = NavigatorWebXR::xrIfExists(*navigator);
-        if (xrSystem && xrSystem->hasActiveImmersiveSession())
-            return true;
+        if (auto xrSystem = NavigatorWebXR::xrIfExists(*navigator))
+            return xrSystem->activeImmersiveSession();
     }
-    return false;
+
+    return nullptr;
 }
-#endif // PLATFORM(IOS_FAMILY) && ENABLE(WEBXR)
+#endif //  ENABLE(WEBXR)
 
 #if HAVE(SPATIAL_TRACKING_LABEL)
 void Page::setDefaultSpatialTrackingLabel(const String& label)
@@ -4797,6 +4815,17 @@ void Page::setDefaultSpatialTrackingLabel(const String& label)
     forEachDocument([&] (Document& document) {
         document.defaultSpatialTrackingLabelChanged(m_defaultSpatialTrackingLabel);
     });
+}
+#endif
+
+#if ENABLE(GAMEPAD)
+void Page::gamepadsRecentlyAccessed()
+{
+    if (MonotonicTime::now() - m_lastAccessNotificationTime < NavigatorGamepad::gamepadsRecentlyAccessedThreshold())
+        return;
+
+    chrome().client().gamepadsRecentlyAccessed();
+    m_lastAccessNotificationTime = MonotonicTime::now();
 }
 #endif
 

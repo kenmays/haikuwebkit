@@ -601,7 +601,7 @@ $hostOS = determineOS unless $hostOS
 $architecture = determineArchitecture unless $architecture
 $isFTLPlatform = !($architecture == "x86" || $architecture == "arm" || $architecture == "mips" || $architecture == "riscv64" || $hostOS == "windows" || $hostOS == "playstation")
 # Special case armv7 and windows, we want to run the wasm tests temporarily without B3/Air support
-$isWasmPlatform = (not $cloop) && ($isFTLPlatform || $architecture == "arm" || ($hostOS == "windows" && $architecture == "x86_64"))
+$isWasmPlatform = (not $cloop) && $jitTests && ($isFTLPlatform || $architecture == "arm" || ($hostOS == "windows" && $architecture == "x86_64"))
 $isSIMDPlatform = $isWasmPlatform && ($architecture == "arm64" || $architecture == "x86_64")
 
 # This is meant for skipping execution of tests than require a lot of address
@@ -1130,6 +1130,7 @@ BASE_MODES = [
         "misc-ftl-no-cjit",
         [
             "--useDataICInFTL=true",
+            "--allowNonSPTagging=false",
         ] +
         FTL_OPTIONS +
         NO_CJIT_OPTIONS
@@ -1157,6 +1158,7 @@ BASE_MODES = [
             "--airForceIRCAllocator=true",
             "--useDataICInFTL=true",
             "--forceUnlinkedDFG=true",
+            "--allowNonSPTagging=false",
         ] +
         FTL_OPTIONS +
         NO_CJIT_OPTIONS
@@ -1218,6 +1220,7 @@ BASE_MODES = [
             "--useRandomizingExecutableIslandAllocation=true",
             "--forcePolyProto=true",
             "--useDataICInFTL=true",
+            "--allowNonSPTagging=false",
         ] +
         FTL_OPTIONS +
         EAGER_OPTIONS +
@@ -1281,6 +1284,7 @@ BASE_MODES = [
         "ftl-no-cjit-no-access-inlining",
         [
             "--useAccessInlining=false",
+            "--allowNonSPTagging=false",
         ] +
         FTL_OPTIONS +
         NO_CJIT_OPTIONS

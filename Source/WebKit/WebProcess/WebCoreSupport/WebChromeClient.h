@@ -297,7 +297,7 @@ private:
 #endif
 
 #if PLATFORM(MAC)
-    std::unique_ptr<WebCore::ScrollbarsController> createScrollbarsController(WebCore::Page&, WebCore::ScrollableArea&) const final;
+    void ensureScrollbarsController(WebCore::Page&, WebCore::ScrollableArea&) const final;
 #endif
 
 #if ENABLE(VIDEO_PRESENTATION_MODE)
@@ -387,10 +387,6 @@ private:
 #endif
     void isPlayingMediaDidChange(WebCore::MediaProducerMediaStateFlags) final;
     void handleAutoplayEvent(WebCore::AutoplayEvent, OptionSet<WebCore::AutoplayEventFlags>) final;
-
-#if ENABLE(APP_HIGHLIGHTS)
-    void storeAppHighlight(WebCore::AppHighlight&&) const final;
-#endif
 
     void setTextIndicator(const WebCore::TextIndicatorData&) const final;
 
@@ -501,6 +497,10 @@ private:
     WebCore::FloatSize screenSizeForFingerprintingProtections(const WebCore::LocalFrame&, WebCore::FloatSize defaultSize) const final;
 
     void didAdjustVisibilityWithSelectors(Vector<String>&&) final;
+
+#if ENABLE(GAMEPAD)
+    void gamepadsRecentlyAccessed() final;
+#endif
 
     mutable bool m_cachedMainFrameHasHorizontalScrollbar { false };
     mutable bool m_cachedMainFrameHasVerticalScrollbar { false };

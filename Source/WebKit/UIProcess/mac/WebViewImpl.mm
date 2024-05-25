@@ -44,6 +44,7 @@
 #import "PageClient.h"
 #import "PageClientImplMac.h"
 #import "PasteboardTypes.h"
+#import "PickerDismissalReason.h"
 #import "PlatformFontInfo.h"
 #import "PlaybackSessionManagerProxy.h"
 #import "RemoteLayerTreeDrawingAreaProxyMac.h"
@@ -126,6 +127,7 @@
 #import <WebKit/WKShareSheet.h>
 #import <WebKit/WKWebViewPrivate.h>
 #import <WebKit/WebBackForwardList.h>
+#import <pal/HysteresisActivity.h>
 #import <pal/spi/cg/CoreGraphicsSPI.h>
 #import <pal/spi/cocoa/AVKitSPI.h>
 #import <pal/spi/cocoa/NSAccessibilitySPI.h>
@@ -1221,6 +1223,7 @@ WebViewImpl::WebViewImpl(NSView <WebViewImplDelegate> *view, WKWebView *outerWeb
     , m_undoTarget(adoptNS([[WKEditorUndoTarget alloc] init]))
     , m_windowVisibilityObserver(adoptNS([[WKWindowVisibilityObserver alloc] initWithView:view impl:*this]))
     , m_accessibilitySettingsObserver(adoptNS([[WKAccessibilitySettingsObserver alloc] initWithImpl:*this]))
+    , m_contentRelativeViewsHysteresis(makeUnique<PAL::HysteresisActivity>([this](auto state) { this->contentRelativeViewsHysteresisTimerFired(state); }, 500_ms))
     , m_mouseTrackingObserver(adoptNS([[WKMouseTrackingObserver alloc] initWithViewImpl:*this]))
     , m_primaryTrackingArea(adoptNS([[NSTrackingArea alloc] initWithRect:view.frame options:trackingAreaOptions() owner:m_mouseTrackingObserver.get() userInfo:nil]))
 {
@@ -1655,6 +1658,8 @@ void WebViewImpl::renewGState()
 {
     if (m_textIndicatorWindow)
         dismissContentRelativeChildWindowsWithAnimation(false);
+
+    suppressContentRelativeChildViews(ContentRelativeChildViewsSuppressionType::TemporarilyRemove);
 
     // Update the view frame.
     if ([m_view window])
@@ -2789,8 +2794,7 @@ void WebViewImpl::selectionDidChange()
 #endif
 
 #if ENABLE(UNIFIED_TEXT_REPLACEMENT)
-    // FIXME: (rdar://123767495) Remove the `isEditable() && m_page->editorState().selectionIsRange` restriction when possible.
-    if (m_page->editorState().hasPostLayoutData() && isEditable() && m_page->editorState().selectionIsRange) {
+    if (m_page->editorState().hasPostLayoutData() && wantsCompleteUnifiedTextReplacementBehavior() && m_page->editorState().selectionIsRange) {
         auto selectionRect = m_page->editorState().postLayoutData->selectionBoundingRect;
         scheduleShowSwapCharactersViewForSelectionRectOfView(selectionRect, m_view.getAutoreleased());
     }
@@ -2809,7 +2813,7 @@ void WebViewImpl::selectionDidChange()
 void WebViewImpl::showShareSheet(const WebCore::ShareDataWithParsedURL& data, WTF::CompletionHandler<void(bool)>&& completionHandler, WKWebView *view)
 {
     if (_shareSheet)
-        [_shareSheet dismiss];
+        [_shareSheet dismissIfNeededWithReason:WebKit::PickerDismissalReason::ResetState];
 
     ASSERT([view respondsToSelector:@selector(shareSheetDidDismiss:)]);
     _shareSheet = adoptNS([[WKShareSheet alloc] initWithView:view]);
@@ -3437,6 +3441,57 @@ void WebViewImpl::dismissContentRelativeChildWindowsFromViewOnly()
 #endif
 }
 
+bool WebViewImpl::hasContentRelativeChildViews() const
+{
+#if ENABLE(UNIFIED_TEXT_REPLACEMENT_UI)
+    return [m_textIndicatorStyleManager hasActiveTextIndicatorStyle];
+#else
+    return false;
+#endif
+}
+
+void WebViewImpl::suppressContentRelativeChildViews(ContentRelativeChildViewsSuppressionType type)
+{
+    if (!hasContentRelativeChildViews())
+        return;
+
+    switch (type) {
+    case ContentRelativeChildViewsSuppressionType::Remove:
+        return m_contentRelativeViewsHysteresis->start();
+
+    case ContentRelativeChildViewsSuppressionType::Restore:
+        return m_contentRelativeViewsHysteresis->stop();
+
+    case ContentRelativeChildViewsSuppressionType::TemporarilyRemove:
+        return m_contentRelativeViewsHysteresis->impulse();
+    }
+}
+
+void WebViewImpl::contentRelativeViewsHysteresisTimerFired(PAL::HysteresisState state)
+{
+    if (!hasContentRelativeChildViews())
+        return;
+
+    if (state == PAL::HysteresisState::Started)
+        suppressContentRelativeChildViews();
+    else
+        restoreContentRelativeChildViews();
+}
+
+void WebViewImpl::suppressContentRelativeChildViews()
+{
+#if ENABLE(UNIFIED_TEXT_REPLACEMENT_UI)
+    [m_textIndicatorStyleManager suppressTextIndicatorStyle];
+#endif
+}
+
+void WebViewImpl::restoreContentRelativeChildViews()
+{
+#if ENABLE(UNIFIED_TEXT_REPLACEMENT_UI)
+    [m_textIndicatorStyleManager restoreTextIndicatorStyle];
+#endif
+}
+
 void WebViewImpl::hideWordDefinitionWindow()
 {
     WebCore::DictionaryLookup::hidePopup();
@@ -3913,16 +3968,6 @@ _WKRemoteObjectRegistry *WebViewImpl::remoteObjectRegistry()
     return m_remoteObjectRegistry.get();
 }
 
-ALLOW_DEPRECATED_DECLARATIONS_BEGIN
-WKBrowsingContextController *WebViewImpl::browsingContextController()
-{
-    if (!m_browsingContextController)
-        m_browsingContextController = adoptNS([[WKBrowsingContextController alloc] _initWithPageRef:toAPI(m_page.ptr())]);
-
-    return m_browsingContextController.get();
-}
-ALLOW_DEPRECATED_DECLARATIONS_END
-
 #if ENABLE(DRAG_SUPPORT)
 void WebViewImpl::draggedImage(NSImage *, CGPoint endPoint, NSDragOperation operation)
 {
@@ -4228,12 +4273,9 @@ void WebViewImpl::startDrag(const WebCore::DragItem& item, ShareableBitmap::Hand
 
         [m_view beginDraggingSessionWithItems:@[draggingItem.get()] event:m_lastMouseDownEvent.get() source:(id <NSDraggingSource>)m_view.getAutoreleased()];
 
-        ASSERT(info.additionalTypes.size() == info.additionalData.size());
-        if (info.additionalTypes.size() == info.additionalData.size()) {
-            for (size_t index = 0; index < info.additionalTypes.size(); ++index) {
-                auto nsData = info.additionalData[index]->createNSData();
-                [pasteboard setData:nsData.get() forType:info.additionalTypes[index]];
-            }
+        for (size_t index = 0; index < info.additionalTypesAndData.size(); ++index) {
+            auto nsData = info.additionalTypesAndData[index].second->createNSData();
+            [pasteboard setData:nsData.get() forType:info.additionalTypesAndData[index].first];
         }
         m_page->didStartDrag();
         return;
@@ -4567,8 +4609,8 @@ void WebViewImpl::removeTextPlaceholder(NSTextPlaceholder *placeholder, bool wil
         completionHandler();
 }
 
-#if ENABLE(UNIFIED_TEXT_REPLACEMENT_UI)
-void WebViewImpl::addTextIndicatorStyleForID(WTF::UUID uuid, WKTextIndicatorStyleType styleType)
+#if ENABLE(UNIFIED_TEXT_REPLACEMENT)
+void WebViewImpl::addTextIndicatorStyleForID(WTF::UUID uuid, const WebKit::TextIndicatorStyleData& data)
 {
     if (!m_page->preferences().textIndicatorStylingEnabled())
         return;
@@ -4579,7 +4621,7 @@ void WebViewImpl::addTextIndicatorStyleForID(WTF::UUID uuid, WKTextIndicatorStyl
     if (!m_textIndicatorStyleManager)
         m_textIndicatorStyleManager = adoptNS([[WKTextIndicatorStyleManager alloc] initWithWebViewImpl:*this]);
 
-    [m_textIndicatorStyleManager addTextIndicatorStyleForID:uuid withStyleType:styleType];
+    [m_textIndicatorStyleManager addTextIndicatorStyleForID:uuid withData:data];
 }
 
 void WebViewImpl::removeTextIndicatorStyleForID(WTF::UUID uuid)
@@ -4616,6 +4658,7 @@ void WebViewImpl::setMagnification(double magnification, CGPoint centerPoint)
         [NSException raise:NSInvalidArgumentException format:@"Magnification should be a positive number"];
 
     dismissContentRelativeChildWindowsWithAnimation(false);
+    suppressContentRelativeChildViews(ContentRelativeChildViewsSuppressionType::TemporarilyRemove);
 
     m_page->scalePageInViewCoordinates(magnification, WebCore::roundedIntPoint(centerPoint));
 }
@@ -4626,6 +4669,7 @@ void WebViewImpl::setMagnification(double magnification)
         [NSException raise:NSInvalidArgumentException format:@"Magnification should be a positive number"];
 
     dismissContentRelativeChildWindowsWithAnimation(false);
+    suppressContentRelativeChildViews(ContentRelativeChildViewsSuppressionType::TemporarilyRemove);
 
     WebCore::FloatPoint viewCenter(NSMidX([m_view bounds]), NSMidY([m_view bounds]));
     m_page->scalePageInViewCoordinates(magnification, roundedIntPoint(viewCenter));
@@ -5230,27 +5274,25 @@ void WebViewImpl::setMarkedText(id string, NSRange selectedRange, NSRange replac
     LOG(TextInput, "setMarkedText:\"%@\" selectedRange:(%u, %u) replacementRange:(%u, %u)", string, selectedRange.location, selectedRange.length, replacementRange.location, replacementRange.length);
 
 #if HAVE(INLINE_PREDICTIONS)
-    BOOL hasTextCompletion = [&] {
-        if (!isAttributedString)
-            return NO;
+    if (RetainPtr attributedString = dynamic_objc_cast<NSAttributedString>(string)) {
+        BOOL hasTextCompletion = [&] {
+            __block BOOL result;
 
-        __block BOOL result;
+            [attributedString enumerateAttribute:NSTextCompletionAttributeName inRange:NSMakeRange(0, [attributedString length]) options:0 usingBlock:^(id value, NSRange range, BOOL *stop) {
+                if ([value respondsToSelector:@selector(boolValue)] && [value boolValue]) {
+                    result = YES;
+                    *stop = YES;
+                }
+            }];
 
-        NSAttributedString *attributedString = (NSAttributedString *)string;
-        [attributedString enumerateAttribute:NSTextCompletionAttributeName inRange:NSMakeRange(0, attributedString.length) options:0 usingBlock:^(id value, NSRange range, BOOL *stop) {
-            if ([value respondsToSelector:@selector(boolValue)] && [value boolValue]) {
-                result = YES;
-                *stop = YES;
-            }
-        }];
+            return result;
+        }();
 
-        return result;
-    }();
-
-    if (hasTextCompletion || m_isHandlingAcceptedCandidate) {
-        m_isHandlingAcceptedCandidate = hasTextCompletion;
-        m_page->setWritingSuggestion([string string], selectedRange);
-        return;
+        if (hasTextCompletion || m_isHandlingAcceptedCandidate) {
+            m_isHandlingAcceptedCandidate = hasTextCompletion;
+            m_page->setWritingSuggestion([attributedString string], selectedRange);
+            return;
+        }
     }
 #endif
 
@@ -6381,11 +6423,23 @@ void WebViewImpl::handleContextMenuTranslation(const WebCore::TranslationContext
 
 #endif // HAVE(TRANSLATION_UI_SERVICES) && ENABLE(CONTEXT_MENUS)
 
+#if ENABLE(UNIFIED_TEXT_REPLACEMENT)
+WebUnifiedTextReplacementBehavior WebViewImpl::unifiedTextReplacementBehavior() const
+{
+    return m_page->configuration().unifiedTextReplacementBehavior();
+}
+
+bool WebViewImpl::wantsCompleteUnifiedTextReplacementBehavior() const
+{
+    return [m_view _web_wantsCompleteUnifiedTextReplacementBehavior];
+}
+#endif
+
 #if ENABLE(UNIFIED_TEXT_REPLACEMENT) && ENABLE(CONTEXT_MENUS)
 
 bool WebViewImpl::canHandleSwapCharacters() const
 {
-    return webViewCanHandleSwapCharacters();
+    return webViewCanHandleSwapCharacters() && unifiedTextReplacementBehavior() != WebUnifiedTextReplacementBehavior::None;
 }
 
 void WebViewImpl::handleContextMenuSwapCharacters(IntRect selectionBoundsInRootView)
@@ -6607,44 +6661,6 @@ void WebViewImpl::uninstallImageAnalysisOverlayView()
 }
 
 #endif // ENABLE(IMAGE_ANALYSIS_ENHANCEMENTS)
-
-#if ENABLE(UNIFIED_TEXT_REPLACEMENT)
-void WebViewImpl::willBeginTextReplacementSession(const WTF::UUID& uuid, WebUnifiedTextReplacementType type, CompletionHandler<void(const Vector<WebUnifiedTextReplacementContextData>&)>&& completionHandler)
-{
-    protectedPage()->willBeginTextReplacementSession(uuid, type, WTFMove(completionHandler));
-}
-
-void WebViewImpl::didBeginTextReplacementSession(const WTF::UUID& uuid, const Vector<WebUnifiedTextReplacementContextData>& contexts)
-{
-    protectedPage()->didBeginTextReplacementSession(uuid, contexts);
-}
-
-void WebViewImpl::textReplacementSessionDidReceiveReplacements(const WTF::UUID& uuid, const Vector<WebTextReplacementData>& replacements, const WebUnifiedTextReplacementContextData& context, bool finished)
-{
-    protectedPage()->textReplacementSessionDidReceiveReplacements(uuid, replacements, context, finished);
-}
-
-void WebViewImpl::textReplacementSessionDidUpdateStateForReplacement(const WTF::UUID& uuid, WebTextReplacementData::State state, const WebTextReplacementData& replacement, const WebUnifiedTextReplacementContextData& context)
-{
-    protectedPage()->textReplacementSessionDidUpdateStateForReplacement(uuid, state, replacement, context);
-}
-
-void WebViewImpl::didEndTextReplacementSession(const WTF::UUID& uuid, bool accepted)
-{
-    protectedPage()->didEndTextReplacementSession(uuid, accepted);
-}
-
-void WebViewImpl::textReplacementSessionDidReceiveTextWithReplacementRange(const WTF::UUID& uuid, const WebCore::AttributedString& attributedText, const WebCore::CharacterRange& range, const WebUnifiedTextReplacementContextData& context)
-{
-    protectedPage()->textReplacementSessionDidReceiveTextWithReplacementRange(uuid, attributedText, range, context);
-}
-
-void WebViewImpl::textReplacementSessionDidReceiveEditAction(const WTF::UUID& uuid, WebKit::WebTextReplacementData::EditAction action)
-{
-    protectedPage()->textReplacementSessionDidReceiveEditAction(uuid, action);
-}
-
-#endif
 
 Ref<WebPageProxy> WebViewImpl::protectedPage() const
 {

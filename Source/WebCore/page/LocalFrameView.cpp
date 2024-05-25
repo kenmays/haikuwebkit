@@ -1473,12 +1473,12 @@ void LocalFrameView::logMockScrollbarsControllerMessage(const String& message) c
     if (!document)
         return;
     document->addConsoleMessage(MessageSource::Other, MessageLevel::Debug,
-        makeString(m_frame->isMainFrame() ? "Main" : "", "LocalFrameView: ", message));
+        makeString(m_frame->isMainFrame() ? "Main"_s : ""_s, "LocalFrameView: "_s, message));
 }
 
 String LocalFrameView::debugDescription() const
 {
-    return makeString("LocalFrameView 0x", hex(reinterpret_cast<uintptr_t>(this), Lowercase), ' ', m_frame->debugDescription());
+    return makeString("LocalFrameView 0x"_s, hex(reinterpret_cast<uintptr_t>(this), Lowercase), ' ', m_frame->debugDescription());
 }
 
 bool LocalFrameView::canShowNonOverlayScrollbars() const
@@ -2807,8 +2807,11 @@ void LocalFrameView::setViewportConstrainedObjectsNeedLayout()
 
 void LocalFrameView::didChangeScrollOffset()
 {
-    if (auto* page = m_frame->page())
+    if (auto* page = m_frame->page()) {
         page->pageOverlayController().didScrollFrame(m_frame.get());
+        InspectorInstrumentation::didScroll(*page);
+    }
+
     m_frame->loader().client().didChangeScrollOffset();
 }
 
@@ -4699,7 +4702,7 @@ void LocalFrameView::willPaintContents(GraphicsContext& context, const IntRect&,
     paintingState.paintBehavior = m_paintBehavior;
     
     if (auto* parentView = parentFrameView()) {
-        constexpr OptionSet<PaintBehavior> flagsToCopy { PaintBehavior::FlattenCompositingLayers, PaintBehavior::Snapshotting, PaintBehavior::DefaultAsynchronousImageDecode, PaintBehavior::ForceSynchronousImageDecode };
+        constexpr OptionSet<PaintBehavior> flagsToCopy { PaintBehavior::FlattenCompositingLayers, PaintBehavior::Snapshotting, PaintBehavior::DefaultAsynchronousImageDecode, PaintBehavior::ForceSynchronousImageDecode, PaintBehavior::ExcludeReplacedContent };
         m_paintBehavior.add(parentView->paintBehavior() & flagsToCopy);
     }
 
@@ -5599,14 +5602,10 @@ void LocalFrameView::setScrollingPerformanceTestingEnabled(bool scrollingPerform
 void LocalFrameView::createScrollbarsController()
 {
     auto* page = m_frame->page();
-    if (page) {
-        if (auto scrollbarController = page->chrome().client().createScrollbarsController(*page, *this)) {
-            setScrollbarsController(WTFMove(scrollbarController));
-            return;
-        }
-    }
+    if (!page)
+        return;
 
-    ScrollView::createScrollbarsController();
+    page->chrome().client().ensureScrollbarsController(*page, *this);
 }
 
 void LocalFrameView::didAddScrollbar(Scrollbar* scrollbar, ScrollbarOrientation orientation)
@@ -6196,6 +6195,11 @@ void LocalFrameView::scrollbarStyleDidChange()
             scrollableArea.scrollbarsController().updateScrollbarStyle();
     }
     scrollbarsController().updateScrollbarStyle();
+}
+
+FrameIdentifier LocalFrameView::rootFrameID() const
+{
+    return m_frame->rootFrame().frameID();
 }
 
 } // namespace WebCore

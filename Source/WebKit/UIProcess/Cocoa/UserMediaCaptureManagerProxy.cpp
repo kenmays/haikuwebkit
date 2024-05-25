@@ -51,6 +51,7 @@
 #include <wtf/cocoa/Entitlements.h>
 
 #define MESSAGE_CHECK(assertion) MESSAGE_CHECK_BASE(assertion, &m_connectionProxy->connection())
+#define MESSAGE_CHECK_COMPLETION(assertion, completion) MESSAGE_CHECK_COMPLETION_BASE(assertion, &m_connectionProxy->connection(), completion)
 
 namespace WebKit {
 class UserMediaCaptureManagerProxySourceProxy;
@@ -552,13 +553,7 @@ void UserMediaCaptureManagerProxy::createMediaSourceForCaptureDeviceWithConstrai
             return;
         }
 
-        proxy->source().whenReady([completionHandler = WTFMove(completionHandler), proxy = WeakPtr { *proxy }] (auto&& error) mutable {
-            if (!!error || !proxy) {
-                completionHandler(error, { }, { });
-                return;
-            }
-            completionHandler({ }, proxy->settings(), proxy->source().capabilities());
-        });
+        completionHandler({ }, proxy->settings(), proxy->source().capabilities());
         m_proxies.add(id, WTFMove(proxy));
     };
 
@@ -566,6 +561,10 @@ void UserMediaCaptureManagerProxy::createMediaSourceForCaptureDeviceWithConstrai
         completeSetup(WTFMove(proxy), id, WTFMove(completionHandler));
         return;
     }
+
+    MESSAGE_CHECK_COMPLETION(constraints->mandatoryConstraints.isValid(), completionHandler({ "Invalid mandatoryConstraints"_s, WebCore::MediaAccessDenialReason::InvalidConstraint }, { }, { }));
+    for (const auto& advancedConstraint : constraints->advancedConstraints)
+        MESSAGE_CHECK_COMPLETION(advancedConstraint.isValid(), completionHandler({ "Invalid advancedConstraints"_s, WebCore::MediaAccessDenialReason::InvalidConstraint }, { }, { }));
 
     proxy->applyConstraints(WTFMove(mediaConstraints), [proxy = WTFMove(proxy), id, completionHandler = WTFMove(completionHandler), completeSetup = WTFMove(completeSetup)](auto&& error) mutable {
         if (error) {
@@ -630,6 +629,10 @@ void UserMediaCaptureManagerProxy::applyConstraints(RealtimeMediaSourceIdentifie
         m_connectionProxy->connection().send(Messages::UserMediaCaptureManager::ApplyConstraintsFailed(id, { }, "Unknown source"_s), 0);
         return;
     }
+
+    MESSAGE_CHECK(constraints.mandatoryConstraints.isValid());
+    for (const auto& advancedConstraint : constraints.advancedConstraints)
+        MESSAGE_CHECK(advancedConstraint.isValid());
 
     proxy->applyConstraints(WTFMove(constraints), [this, weakThis = WeakPtr { *this }, id, proxy](auto&& result) {
 
@@ -742,6 +745,7 @@ bool UserMediaCaptureManagerProxy::hasSourceProxies() const
 
 }
 
+#undef MESSAGE_CHECK_COMPLETION
 #undef MESSAGE_CHECK
 
 #endif

@@ -872,28 +872,27 @@ ALWAYS_INLINE TokenType LiteralParser<CharType>::Lexer::lexString(LiteralParserT
                 constexpr size_t stride = 16 / sizeof(CharType);
                 using UnsignedType = std::make_unsigned_t<CharType>;
                 if (static_cast<size_t>(m_end - m_ptr) >= stride) {
-                    constexpr auto quoteMask = WTF::splatBulk(static_cast<UnsignedType>('"'));
-                    constexpr auto escapeMask = WTF::splatBulk(static_cast<UnsignedType>('\\'));
-                    constexpr auto controlMask = WTF::splatBulk(static_cast<UnsignedType>(' '));
+                    constexpr auto quoteMask = SIMD::splat(static_cast<UnsignedType>('"'));
+                    constexpr auto escapeMask = SIMD::splat(static_cast<UnsignedType>('\\'));
+                    constexpr auto controlMask = SIMD::splat(static_cast<UnsignedType>(' '));
+                    auto match = [&](auto* cursor) ALWAYS_INLINE_LAMBDA {
+                        auto input = SIMD::load(bitwise_cast<const UnsignedType*>(cursor));
+                        auto quotes = SIMD::equal(input, quoteMask);
+                        auto escapes = SIMD::equal(input, escapeMask);
+                        auto controls = SIMD::lessThan(input, controlMask);
+                        auto mask = SIMD::merge(quotes, SIMD::merge(escapes, controls));
+                        return SIMD::findFirstNonZeroIndex(mask);
+                    };
+
                     for (; m_ptr + (stride - 1) < m_end; m_ptr += stride) {
-                        auto input = WTF::loadBulk(bitwise_cast<const UnsignedType*>(m_ptr));
-                        auto quotes = WTF::equalBulk(input, quoteMask);
-                        auto escapes = WTF::equalBulk(input, escapeMask);
-                        auto controls = WTF::lessThanBulk(input, controlMask);
-                        auto mask = WTF::mergeBulk(quotes, WTF::mergeBulk(escapes, controls));
-                        if (WTF::isNonZeroBulk(mask)) {
-                            m_ptr += WTF::findFirstNonZeroIndexBulk(mask);
+                        if (auto index = match(m_ptr)) {
+                            m_ptr += index.value();
                             return;
                         }
                     }
                     if (m_ptr < m_end) {
-                        auto input = WTF::loadBulk(bitwise_cast<const UnsignedType*>(m_end - stride));
-                        auto quotes = WTF::equalBulk(input, quoteMask);
-                        auto escapes = WTF::equalBulk(input, escapeMask);
-                        auto controls = WTF::lessThanBulk(input, controlMask);
-                        auto mask = WTF::mergeBulk(quotes, WTF::mergeBulk(escapes, controls));
-                        if (WTF::isNonZeroBulk(mask)) {
-                            m_ptr = m_end - stride + WTF::findFirstNonZeroIndexBulk(mask);
+                        if (auto index = match(m_end - stride)) {
+                            m_ptr = m_end - stride + index.value();
                             return;
                         }
                         m_ptr = m_end;
@@ -1018,10 +1017,10 @@ slowPathBegin:
     } else {
         if (m_builder.is8Bit()) {
             token.stringIs8Bit = 1;
-            token.stringStart8 = m_builder.characters8();
+            token.stringStart8 = m_builder.span8().data();
         } else {
             token.stringIs8Bit = 0;
-            token.stringStart16 = m_builder.characters16();
+            token.stringStart16 = m_builder.span16().data();
         }
         token.stringOrIdentifierLength = m_builder.length();
     }

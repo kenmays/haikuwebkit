@@ -60,6 +60,10 @@
 #define WK_WEB_VIEW_PROTOCOLS <WKShareSheetDelegate>
 #endif
 
+#if PLATFORM(COCOA)
+#import "WKTextIndicatorStyleType.h"
+#endif
+
 #if !defined(WK_WEB_VIEW_PROTOCOLS)
 #define WK_WEB_VIEW_PROTOCOLS
 #endif
@@ -306,7 +310,8 @@ struct PerWebProcessState {
     RetainPtr<UIView> _resizeAnimationView;
     CGFloat _lastAdjustmentForScroller;
 
-    RetainPtr<id> _endLiveResizeNotificationObserver;
+    CGSize _lastKnownWindowSize;
+    RetainPtr<NSTimer> _endLiveResizeTimer;
 
     WebCore::FloatBoxExtent _obscuredInsetsWhenSaved;
 
@@ -367,6 +372,10 @@ struct PerWebProcessState {
 #if ENABLE(PAGE_LOAD_OBSERVER)
     RetainPtr<NSString> _pendingPageLoadObserverHost;
 #endif
+
+#if ENABLE(GAMEPAD)
+    RetainPtr<id> _gamepadsRecentlyAccessedState;
+#endif
 }
 
 - (BOOL)_isValid;
@@ -390,7 +399,10 @@ struct PerWebProcessState {
 - (void)_textReplacementSession:(NSUUID *)sessionUUID showInformationForReplacementWithUUID:(NSUUID *)replacementUUID relativeToRect:(CGRect)rect;
 
 - (void)_textReplacementSession:(NSUUID *)sessionUUID updateState:(WebKit::WebTextReplacementDataState)state forReplacementWithUUID:(NSUUID *)replacementUUID;
+- (void)_addTextIndicatorStyleForID:(NSUUID *)uuid withData:(const WebKit::TextIndicatorStyleData&)styleData;
 - (void)_removeTextIndicatorStyleForID:(NSUUID *)uuid;
+
+- (BOOL)_wantsCompleteUnifiedTextReplacementBehavior;
 #endif
 
 - (void)_internalDoAfterNextPresentationUpdate:(void (^)(void))updateBlock withoutWaitingForPainting:(BOOL)withoutWaitingForPainting withoutWaitingForAnimatedResize:(BOOL)withoutWaitingForAnimatedResize;
@@ -406,6 +418,10 @@ struct PerWebProcessState {
 - (std::optional<BOOL>)_resolutionForShareSheetImmediateCompletionForTesting;
 
 - (void)_didAccessBackForwardList NS_DIRECT;
+
+#if ENABLE(GAMEPAD)
+- (void)_setGamepadsRecentlyAccessed:(BOOL)gamepadsRecentlyAccessed;
+#endif
 
 - (WKPageRef)_pageForTesting;
 - (NakedPtr<WebKit::WebPageProxy>)_page;

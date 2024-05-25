@@ -476,26 +476,33 @@ JSC_DEFINE_HOST_FUNCTION(globalFuncEval, (JSGlobalObject* globalObject, CallFram
     auto scope = DECLARE_THROW_SCOPE(vm);
 
     JSValue x = callFrame->argument(0);
-    if (!x.isString())
+    JSString* codeString = nullptr;
+    if (LIKELY(x.isString()))
+        codeString = asString(x);
+    else if (Options::useTrustedTypes()) {
+        auto code = globalObject->globalObjectMethodTable()->codeForEval(globalObject, x);
+        if (!code.isNull())
+            codeString = jsString(vm, code);
+    }
+
+    if (!codeString)
         return JSValue::encode(x);
 
-
-    auto codeString = asString(x);
     if (!globalObject->evalEnabled()) {
         globalObject->globalObjectMethodTable()->reportViolationForUnsafeEval(globalObject, codeString);
         throwException(globalObject, scope, createEvalError(globalObject, globalObject->evalDisabledErrorMessage()));
         return JSValue::encode(jsUndefined());
     }
 
-    String s = codeString->value(globalObject);
+    auto s = codeString->value(globalObject);
     RETURN_IF_EXCEPTION(scope, encodedJSValue());
 
     JSValue parsedObject;
-    if (s.is8Bit()) {
-        LiteralParser preparser(globalObject, s.span8(), SloppyJSON, nullptr);
+    if (s->is8Bit()) {
+        LiteralParser preparser(globalObject, s->span8(), SloppyJSON, nullptr);
         parsedObject = preparser.tryLiteralParse();
     } else {
-        LiteralParser preparser(globalObject, s.span16(), SloppyJSON, nullptr);
+        LiteralParser preparser(globalObject, s->span16(), SloppyJSON, nullptr);
         parsedObject = preparser.tryLiteralParse();
     }
     RETURN_IF_EXCEPTION(scope, encodedJSValue());
@@ -548,9 +555,9 @@ JSC_DEFINE_HOST_FUNCTION(globalFuncParseFloat, (JSGlobalObject* globalObject, Ca
 
     auto* jsString = value.toString(globalObject);
     RETURN_IF_EXCEPTION(scope, { });
-    auto viewWithString = jsString->viewWithUnderlyingString(globalObject);
+    auto view = jsString->view(globalObject);
     RETURN_IF_EXCEPTION(scope, { });
-    return JSValue::encode(jsNumber(parseFloat(viewWithString.view)));
+    return JSValue::encode(jsNumber(parseFloat(view)));
 }
 
 JSC_DEFINE_HOST_FUNCTION(globalFuncDecodeURI, (JSGlobalObject* globalObject, CallFrame* callFrame))

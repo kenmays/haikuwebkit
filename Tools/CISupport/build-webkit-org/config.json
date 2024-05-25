@@ -37,9 +37,6 @@
                   { "name": "bot603", "platform": "mac-ventura" },
                   { "name": "bot632", "platform": "mac-ventura" },
 
-                  { "name": "bot135", "platform": "*" },
-                  { "name": "bot138", "platform": "*" },
-                  { "name": "bot139", "platform": "*" },
                   { "name": "bot141", "platform": "*" },
                   { "name": "bot185", "platform": "*" },
                   { "name": "bot187", "platform": "*" },
@@ -61,6 +58,15 @@
                   { "name": "bot653", "platform": "ios-simulator-17" },
                   { "name": "bot667", "platform": "ios-simulator-17"},
                   { "name": "bot664", "platform": "ios-simulator-17"},
+                                    
+                  { "name": "bot134", "platform": "visionos-simulator-1" },
+                  { "name": "bot135", "platform": "visionos-simulator-1" },
+                  { "name": "bot137", "platform": "visionos-simulator-1" },
+                  { "name": "bot138", "platform": "visionos-1" },
+                  { "name": "bot139", "platform": "visionos-simulator-1" },
+                  { "name": "bot140", "platform": "visionos-simulator-1" },
+                  { "name": "bot143", "platform": "visionos-simulator-1" },
+                  { "name": "bot144", "platform": "visionos-simulator-1" },
 
                   { "name": "bot609", "platform": "watchos-10" },
                   { "name": "bot672", "platform": "watchos-simulator-10" },
@@ -103,6 +109,7 @@
                   { "name": "gtk-linux-bot-20", "platform": "gtk" },
                   { "name": "gtk-linux-bot-21", "platform": "gtk" },
                   { "name": "gtk-linux-bot-22", "platform": "gtk" },
+                  { "name": "gtk-linux-bot-23", "platform": "gtk" },
 
                   { "name": "jsconly-linux-igalia-bot-1", "platform": "jsc-only" },
                   { "name": "jsconly-linux-igalia-bot-2", "platform": "jsc-only" },
@@ -143,7 +150,8 @@
                   { "name": "wpe-linux-bot-32", "platform": "wpe" },
                   { "name": "wpe-linux-bot-33", "platform": "wpe" },
                   { "name": "wpe-linux-bot-34", "platform": "wpe" },
-                  { "name": "wpe-linux-bot-35", "platform": "wpe" }
+                  { "name": "wpe-linux-bot-35", "platform": "wpe" },
+                  { "name": "wpe-linux-bot-36", "platform": "wpe" }
                 ],
 
   "builders":   [
@@ -342,6 +350,35 @@
                     "workernames": ["bot664"]
                   },
                   {
+                    "name": "Apple-visionOS-1-Release-Build", "factory": "BuildFactory",
+                    "platform": "visionos-1", "configuration": "release", "architectures": ["arm64"],
+                    "workernames": ["bot138"]
+                  },
+                  {
+                    "name": "Apple-visionOS-1-Simulator-Release-Build", "factory": "BuildFactory",
+                    "platform": "visionos-simulator-1", "configuration": "release", "architectures": ["arm64"],
+                    "triggers": ["visionos-simulator-1-release-tests-wk2"],
+                    "workernames": ["bot134"]
+                  },
+                  {
+                    "name": "Apple-visionOS-1-Simulator-Debug-Build", "factory": "BuildFactory",
+                    "platform": "visionos-simulator-1", "configuration": "debug", "architectures": ["arm64"],
+                    "triggers": ["visionos-simulator-1-debug-tests-wk2"],
+                    "workernames": ["bot135", "bot137"]
+                  },
+                  {
+                    "name": "Apple-visionOS-1-Simulator-Release-WK2-Tests", "factory": "TestAllButJSCFactory",
+                    "platform": "visionos-simulator-1", "configuration": "release", "architectures": ["arm64"], "device_model": "visionpro",
+                    "additionalArguments": ["--no-retry-failures", "--child-processes=1"],
+                    "workernames": ["bot139", "bot140"]
+                  },
+                  {
+                    "name": "Apple-visionOS-1-Simulator-Debug-WK2-Tests", "factory": "TestAllButJSCFactory",
+                    "platform": "visionos-simulator-1", "configuration": "debug", "architectures": ["arm64"], "device_model": "visionpro",
+                    "additionalArguments": ["--no-retry-failures", "--no-sample-on-timeout", "--child-processes=1"],
+                    "workernames": ["bot143", "bot144"]
+                  },
+                  {
                     "name": "Apple-tvOS-17-Release-Build", "factory": "BuildFactory",
                     "platform": "tvos-17", "configuration": "release", "architectures": ["arm64"],
                     "workernames": ["bot607"]
@@ -430,7 +467,7 @@
                     "workernames": ["gtk-linux-bot-22"]
                   },
                   {
-                    "name": "GTK-Linux-64-bit-Release-Ubuntu-2004-Build", "factory": "NoInstallDependenciesBuildFactory",
+                    "name": "GTK-Linux-64-bit-Release-Ubuntu-2204-Build", "factory": "NoInstallDependenciesBuildFactory",
                     "platform": "gtk", "configuration": "release", "architectures": ["x86_64"],
                     "additionalArguments": ["--no-experimental-features"],
                     "workernames": ["gtk-linux-bot-11"]
@@ -446,6 +483,12 @@
                     "platform": "gtk", "configuration": "release", "architectures": ["x86_64"],
                     "additionalArguments": ["--no-bubblewrap-sandbox"],
                     "workernames": ["gtk-linux-bot-17"]
+                  },
+                  {
+                    "name": "GTK-Linux-64bit-Release-Packaging-Nightly-Ubuntu2204", "factory": "BuildAndGenerateMiniBrowserBundleFactory",
+                    "platform": "gtk", "configuration": "release", "architectures": ["x86_64"],
+                    "additionalArguments": ["--no-bubblewrap-sandbox"],
+                    "workernames": ["gtk-linux-bot-23"]
                   },
                   {
                     "name": "GTK-Linux-64-bit-Release-GTK4-Tests", "factory": "BuildAndTestAndArchiveAllButJSCFactory",
@@ -564,13 +607,19 @@
                     "workernames": ["wpe-linux-bot-8"]
                   },
                   {
+                    "name": "WPE-Linux-64bit-Release-Packaging-Nightly-Ubuntu2204", "factory": "BuildAndGenerateMiniBrowserBundleFactory",
+                    "platform": "wpe", "configuration": "release", "architectures": ["x86_64"],
+                    "additionalArguments": ["--no-bubblewrap-sandbox", "--cmakeargs=-DENABLE_WPE_QT_API=OFF"],
+                    "workernames": ["wpe-linux-bot-36"]
+                  },
+                  {
                     "name": "WPE-Linux-64-bit-Release-Non-Unified-Build", "factory": "BuildFactory",
                     "platform": "wpe", "configuration": "release", "architectures": ["x86_64"],
                     "additionalArguments": ["--cmakeargs=-DENABLE_UNIFIED_BUILDS=OFF"],
                     "workernames": ["wpe-linux-bot-9"]
                   },
                   {
-                    "name": "WPE-Linux-64-bit-Release-Ubuntu-2004-Build", "factory": "NoInstallDependenciesBuildFactory",
+                    "name": "WPE-Linux-64-bit-Release-Ubuntu-2204-Build", "factory": "NoInstallDependenciesBuildFactory",
                     "platform": "wpe", "configuration": "release", "architectures": ["x86_64"],
                     "additionalArguments": ["--no-experimental-features"],
                     "workernames": ["wpe-linux-bot-10"]
@@ -645,10 +694,10 @@
                                      "GTK-Linux-64-bit-Release-Clang-Build",
                                      "GTK-Linux-64-bit-Release-Debian-11-Build",
                                      "GTK-Linux-64-bit-Release-Debian-Stable-Build",
-                                     "GTK-Linux-64-bit-Release-Ubuntu-2004-Build",
+                                     "GTK-Linux-64-bit-Release-Ubuntu-2204-Build",
                                      "GTK-Linux-64-bit-Release-Ubuntu-LTS-Build",
                                      "GTK-Linux-64-bit-Release-GTK4-Tests",
-                                     "WPE-Linux-64-bit-Release-Ubuntu-2004-Build",
+                                     "WPE-Linux-64-bit-Release-Ubuntu-2204-Build",
                                      "WPE-Linux-64-bit-Release-Ubuntu-LTS-Build",
                                      "WPE-Linux-RPi4-32bits-Mesa-Release-Perf-Build",
                                      "WPE-Linux-RPi4-64bits-Mesa-Release-Perf-Build",
@@ -748,6 +797,12 @@
                   { "type": "PlatformSpecificScheduler", "platform": "ios-simulator-17", "branch": "main", "treeStableTimer": 45.0,
                     "builderNames": ["Apple-iOS-17-Simulator-Release-Build", "Apple-iOS-17-Simulator-Debug-Build"]
                   },
+                  { "type": "PlatformSpecificScheduler", "platform": "visionos-1", "branch": "main", "treeStableTimer": 45.0,
+                  "builderNames": ["Apple-visionOS-1-Release-Build"]
+                  },
+                  { "type": "PlatformSpecificScheduler", "platform": "visionos-simulator-1", "branch": "main", "treeStableTimer": 45.0,
+                  "builderNames": ["Apple-visionOS-1-Simulator-Release-Build", "Apple-visionOS-1-Simulator-Debug-Build"]
+                  },
                   { "type": "PlatformSpecificScheduler", "platform": "tvos-17", "branch": "main", "treeStableTimer": 45.0,
                     "builderNames": ["Apple-tvOS-17-Release-Build"]
                   },
@@ -771,6 +826,12 @@
                   },
                   { "type": "Triggerable", "name": "ipados-simulator-17-debug-tests-wk2",
                     "builderNames": ["Apple-iPadOS-17-Simulator-Debug-WK2-Tests"]
+                  },
+                  { "type": "Triggerable", "name": "visionos-simulator-1-release-tests-wk2",
+                  "builderNames": ["Apple-visionOS-1-Simulator-Release-WK2-Tests"]
+                  },
+                  { "type": "Triggerable", "name": "visionos-simulator-1-debug-tests-wk2",
+                  "builderNames": ["Apple-visionOS-1-Simulator-Debug-WK2-Tests"]
                   },
                   { "type": "Triggerable", "name": "gtk-linux-64-release-tests",
                     "builderNames": ["GTK-Linux-64-bit-Release-Tests"]
@@ -844,7 +905,9 @@
                   { "type": "Nightly", "name": "NightlyScheduler", "change_filter": "main_filter",
                     "branch": "main", "hour": 22, "minute": 0,
                     "builderNames": ["GTK-Linux-64bit-Release-Packaging-Nightly-Ubuntu2004",
-                                     "WPE-Linux-64bit-Release-Packaging-Nightly-Ubuntu2004"]
+                                     "GTK-Linux-64bit-Release-Packaging-Nightly-Ubuntu2204",
+                                     "WPE-Linux-64bit-Release-Packaging-Nightly-Ubuntu2004",
+                                     "WPE-Linux-64bit-Release-Packaging-Nightly-Ubuntu2204"]
                   }
                 ]
 }

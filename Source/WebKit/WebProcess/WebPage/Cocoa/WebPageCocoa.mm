@@ -311,9 +311,9 @@ DictionaryPopupInfo WebPage::dictionaryPopupInfoForRange(LocalFrame& frame, cons
 }
 
 #if ENABLE(UNIFIED_TEXT_REPLACEMENT)
-std::optional<WebCore::SimpleRange> WebPage::getRangeforUUID(const WTF::UUID& uuid)
+std::optional<WebCore::SimpleRange> WebPage::getRangeForUUID(const WTF::UUID& uuid)
 {
-    auto range = m_unifiedTextReplacementController->contextRangeForSessionWithUUID(uuid);
+    auto range = m_unifiedTextReplacementController->contextRangeForSessionOrRangeWithUUID(uuid);
     if (range)
         return range;
 
@@ -321,23 +321,18 @@ std::optional<WebCore::SimpleRange> WebPage::getRangeforUUID(const WTF::UUID& uu
     return WebCore::makeSimpleRange(liveRange);
 }
 
-void WebPage::getTextIndicatorForID(const WTF::UUID& uuid, CompletionHandler<void(std::optional<WebCore::TextIndicatorData>&&)>&& completionHandler)
+void WebPage::createTextIndicatorForRange(const WebCore::SimpleRange& range, CompletionHandler<void(std::optional<WebCore::TextIndicatorData>&&)>&& completionHandler)
 {
-    auto sessionRange = getRangeforUUID(uuid);
-
-    if (!sessionRange) {
-        completionHandler(std::nullopt);
-        return;
-    }
-
     if (RefPtr localMainFrame = dynamicDowncast<LocalFrame>(m_page->mainFrame())) {
         std::optional<TextIndicatorData> textIndicatorData;
         constexpr OptionSet textIndicatorOptions {
             TextIndicatorOption::IncludeSnapshotOfAllVisibleContentWithoutSelection,
             TextIndicatorOption::ExpandClipBeyondVisibleRect,
-            TextIndicatorOption::UseSelectionRectForSizing
+            TextIndicatorOption::UseSelectionRectForSizing,
+            TextIndicatorOption::SkipReplacedContent,
+            TextIndicatorOption::RespectTextColor
         };
-        if (auto textIndicator = TextIndicator::createWithRange(*sessionRange, textIndicatorOptions, TextIndicatorPresentationTransition::None, { }))
+        if (auto textIndicator = TextIndicator::createWithRange(range, textIndicatorOptions, TextIndicatorPresentationTransition::None, { }))
             textIndicatorData = textIndicator->data();
         completionHandler(WTFMove(textIndicatorData));
         return;
@@ -345,7 +340,18 @@ void WebPage::getTextIndicatorForID(const WTF::UUID& uuid, CompletionHandler<voi
     completionHandler(std::nullopt);
 }
 
-void WebPage::updateTextIndicatorStyleVisibilityForID(const WTF::UUID uuid, bool visible, CompletionHandler<void()>&& completionHandler)
+void WebPage::createTextIndicatorForID(const WTF::UUID& uuid, CompletionHandler<void(std::optional<WebCore::TextIndicatorData>&&)>&& completionHandler)
+{
+    auto sessionRange = getRangeForUUID(uuid);
+
+    if (!sessionRange) {
+        completionHandler(std::nullopt);
+        return;
+    }
+    createTextIndicatorForRange(*sessionRange, WTFMove(completionHandler));
+}
+
+void WebPage::updateTextIndicatorStyleVisibilityForID(const WTF::UUID& uuid, bool visible, CompletionHandler<void()>&& completionHandler)
 {
     RefPtr frame = m_page->checkedFocusController()->focusedOrMainFrame();
     if (!frame) {
@@ -361,25 +367,27 @@ void WebPage::updateTextIndicatorStyleVisibilityForID(const WTF::UUID uuid, bool
         return;
     }
 
-    auto sessionRange = getRangeforUUID(uuid);
+    auto sessionRange = getRangeForUUID(uuid);
 
     if (!sessionRange) {
         completionHandler();
         return;
     }
 
-    if (visible)
-        document->markers().removeMarkers(*sessionRange, { DocumentMarker::Type::TransparentContent });
-    else
-        document->markers().addMarker(*sessionRange, DocumentMarker::Type::TransparentContent);
+    if (visible) {
+        // FIXME: <https://webkit.org/b/274198> Text indicator style logic in WebPage and UnifiedTextReplacementController should be shared.
+        if (m_textIndicatorStyleEnablementRanges.contains(uuid)) {
+            m_unifiedTextReplacementController->removeTransparentMarkersForUUID(uuid);
+        } else
+            m_unifiedTextReplacementController->removeTransparentMarkersForSession(uuid, RemoveAllMarkersForSession::No);
+    } else
+        document->markers().addTransparentContentMarker(*sessionRange, uuid);
 
     completionHandler();
 }
 
 void WebPage::enableTextIndicatorStyleAfterElementWithID(const String& elementID, const WTF::UUID& uuid)
 {
-    // FIXME: move the start of the range to be after the element with the ID listed.
-
     RefPtr frame = m_page->checkedFocusController()->focusedOrMainFrame();
     if (!frame) {
         ASSERT_NOT_REACHED();
@@ -403,6 +411,12 @@ void WebPage::enableTextIndicatorStyleAfterElementWithID(const String& elementID
     if (!simpleRange) {
         ASSERT_NOT_REACHED();
         return;
+    }
+
+    if (RefPtr element = document->getElementById(elementID)) {
+        auto elementRange = makeRangeSelectingNodeContents(*element);
+        if (!elementRange.collapsed())
+            simpleRange->start = elementRange.end;
     }
 
     m_textIndicatorStyleEnablementRanges.add(uuid, createLiveRange(*simpleRange));
@@ -1054,39 +1068,39 @@ void WebPage::setMediaEnvironment(const String& mediaEnvironment)
 #endif
 
 #if ENABLE(UNIFIED_TEXT_REPLACEMENT)
-void WebPage::willBeginTextReplacementSession(const WTF::UUID& uuid, WebUnifiedTextReplacementType type, CompletionHandler<void(const Vector<WebUnifiedTextReplacementContextData>&)>&& completionHandler)
+void WebPage::willBeginTextReplacementSession(const std::optional<WebUnifiedTextReplacementSessionData>& session, CompletionHandler<void(const Vector<WebUnifiedTextReplacementContextData>&)>&& completionHandler)
 {
-    m_unifiedTextReplacementController->willBeginTextReplacementSession(uuid, type, WTFMove(completionHandler));
+    m_unifiedTextReplacementController->willBeginTextReplacementSession(session, WTFMove(completionHandler));
 }
 
-void WebPage::didBeginTextReplacementSession(const WTF::UUID& uuid, const Vector<WebUnifiedTextReplacementContextData>& contexts)
+void WebPage::didBeginTextReplacementSession(const WebUnifiedTextReplacementSessionData& session, const Vector<WebUnifiedTextReplacementContextData>& contexts)
 {
-    m_unifiedTextReplacementController->didBeginTextReplacementSession(uuid, contexts);
+    m_unifiedTextReplacementController->didBeginTextReplacementSession(session, contexts);
 }
 
-void WebPage::textReplacementSessionDidReceiveReplacements(const WTF::UUID& uuid, const Vector<WebTextReplacementData>& replacements, const WebUnifiedTextReplacementContextData& context, bool finished)
+void WebPage::textReplacementSessionDidReceiveReplacements(const WebUnifiedTextReplacementSessionData& session, const Vector<WebTextReplacementData>& replacements, const WebUnifiedTextReplacementContextData& context, bool finished)
 {
-    m_unifiedTextReplacementController->textReplacementSessionDidReceiveReplacements(uuid, replacements, context, finished);
+    m_unifiedTextReplacementController->textReplacementSessionDidReceiveReplacements(session, replacements, context, finished);
 }
 
-void WebPage::textReplacementSessionDidUpdateStateForReplacement(const WTF::UUID& uuid, WebTextReplacementData::State state, const WebTextReplacementData& replacement, const WebUnifiedTextReplacementContextData& context)
+void WebPage::textReplacementSessionDidUpdateStateForReplacement(const WebUnifiedTextReplacementSessionData& session, WebTextReplacementData::State state, const WebTextReplacementData& replacement, const WebUnifiedTextReplacementContextData& context)
 {
-    m_unifiedTextReplacementController->textReplacementSessionDidUpdateStateForReplacement(uuid, state, replacement, context);
+    m_unifiedTextReplacementController->textReplacementSessionDidUpdateStateForReplacement(session, state, replacement, context);
 }
 
-void WebPage::didEndTextReplacementSession(const WTF::UUID& uuid, bool accepted)
+void WebPage::didEndTextReplacementSession(const WebUnifiedTextReplacementSessionData& session, bool accepted)
 {
-    m_unifiedTextReplacementController->didEndTextReplacementSession(uuid, accepted);
+    m_unifiedTextReplacementController->didEndTextReplacementSession(session, accepted);
 }
 
-void WebPage::textReplacementSessionDidReceiveTextWithReplacementRange(const WTF::UUID& uuid, const WebCore::AttributedString& attributedText, const WebCore::CharacterRange& range, const WebUnifiedTextReplacementContextData& context)
+void WebPage::textReplacementSessionDidReceiveTextWithReplacementRange(const WebUnifiedTextReplacementSessionData& session, const WebCore::AttributedString& attributedText, const WebCore::CharacterRange& range, const WebUnifiedTextReplacementContextData& context, bool finished)
 {
-    m_unifiedTextReplacementController->textReplacementSessionDidReceiveTextWithReplacementRange(uuid, attributedText, range, context);
+    m_unifiedTextReplacementController->textReplacementSessionDidReceiveTextWithReplacementRange(session, attributedText, range, context, finished);
 }
 
-void WebPage::textReplacementSessionDidReceiveEditAction(const WTF::UUID& uuid, WebKit::WebTextReplacementData::EditAction action)
+void WebPage::textReplacementSessionDidReceiveEditAction(const WebUnifiedTextReplacementSessionData& session, WebKit::WebTextReplacementData::EditAction action)
 {
-    m_unifiedTextReplacementController->textReplacementSessionDidReceiveEditAction(uuid, action);
+    m_unifiedTextReplacementController->textReplacementSessionDidReceiveEditAction(session, action);
 }
 
 void WebPage::textReplacementSessionShowInformationForReplacementWithUUIDRelativeToRect(const WTF::UUID& sessionUUID, const WTF::UUID& replacementUUID, WebCore::IntRect rect)
@@ -1175,7 +1189,20 @@ std::optional<SimpleRange> WebPage::autocorrectionContextRange()
             endPosition = nextPosition;
     }
 
-    return makeSimpleRange(contextStartPosition, endPosition);
+    // Strip trailing newlines.
+
+    auto finalRange = makeSimpleRange(contextStartPosition, endPosition);
+    if (!finalRange)
+        return std::nullopt;
+
+    auto text = WebCore::plainText(*finalRange);
+    while (text.endsWith('\n')) {
+        endPosition = WebCore::positionOfNextBoundaryOfGranularity(endPosition, WebCore::TextGranularity::CharacterGranularity, WebCore::SelectionDirection::Backward);
+        finalRange = makeSimpleRange(contextStartPosition, endPosition);
+        text = WebCore::plainText(*finalRange);
+    }
+
+    return finalRange;
 }
 
 } // namespace WebKit

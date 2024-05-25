@@ -165,32 +165,6 @@ private:
     unsigned m_length;
 };
 
-// FIXME: Port call sites to use ASCIILiteral or std::span and remove.
-template<> class StringTypeAdapter<const char*, void> : public StringTypeAdapter<const LChar*, void> {
-public:
-    StringTypeAdapter(const char* characters)
-        : StringTypeAdapter<const LChar*, void> { reinterpret_cast<const LChar*>(characters) }
-    {
-    }
-};
-
-// FIXME: Port call sites to use ASCIILiteral or std::span and remove.
-template<> class StringTypeAdapter<char*, void> : public StringTypeAdapter<const char*, void> {
-public:
-    StringTypeAdapter(const char* characters)
-        : StringTypeAdapter<const char*, void> { characters }
-    {
-    }
-};
-
-template<> class StringTypeAdapter<ASCIILiteral, void> : public StringTypeAdapter<const LChar*, void> {
-public:
-    StringTypeAdapter(ASCIILiteral characters)
-        : StringTypeAdapter<const LChar*, void> { characters.characters8() }
-    {
-    }
-};
-
 template<typename CharacterType, size_t Extent> class StringTypeAdapter<std::span<CharacterType, Extent>, void> {
 public:
     StringTypeAdapter(std::span<CharacterType, Extent> span)
@@ -212,6 +186,14 @@ public:
 private:
     const CharacterType* m_characters;
     unsigned m_length;
+};
+
+template<> class StringTypeAdapter<ASCIILiteral, void> : public StringTypeAdapter<std::span<const LChar>, void> {
+public:
+    StringTypeAdapter(ASCIILiteral characters)
+        : StringTypeAdapter<std::span<const LChar>, void> { characters.span8() }
+    {
+    }
 };
 
 template<typename CharacterType, size_t InlineCapacity> class StringTypeAdapter<Vector<CharacterType, InlineCapacity>, void> : public StringTypeAdapter<std::span<const CharacterType>> {
@@ -238,7 +220,7 @@ public:
     }
 
 private:
-    StringImpl* const m_string;
+    SUPPRESS_UNCOUNTED_MEMBER StringImpl* const m_string;
 };
 
 template<> class StringTypeAdapter<AtomStringImpl*, void> : public StringTypeAdapter<StringImpl*, void> {
@@ -281,7 +263,7 @@ public:
     }
 
 private:
-    StringImpl& m_string;
+    SUPPRESS_UNCOUNTED_MEMBER StringImpl& m_string;
 };
 
 template<> class StringTypeAdapter<AtomStringImpl&, void> : public StringTypeAdapter<StringImpl&, void> {

@@ -116,6 +116,7 @@ class NativeWebTouchEvent;
 class SmartMagnificationController;
 class WebOpenPanelResultListenerProxy;
 class WebPageProxy;
+enum class PickerDismissalReason : uint8_t;
 }
 
 @class AVPlayerViewController;
@@ -266,7 +267,7 @@ struct WKSelectionDrawingInfo {
     enum class SelectionType { None, Plugin, Range };
     WKSelectionDrawingInfo();
     explicit WKSelectionDrawingInfo(const EditorState&);
-    SelectionType type;
+    SelectionType type { SelectionType::None };
     WebCore::IntRect caretRect;
     WebCore::Color caretColor;
     Vector<WebCore::SelectionGeometry> selectionGeometries;
@@ -681,6 +682,8 @@ struct ImageAnalysisContextMenuActionData {
 - (void)cleanUpInteraction;
 - (void)cleanUpInteractionPreviewContainers;
 
+- (void)dismissPickersIfNeededWithReason:(WebKit::PickerDismissalReason)reason;
+
 - (void)scrollViewWillStartPanOrPinchGesture;
 
 - (void)buildMenuForWebViewWithBuilder:(id <UIMenuBuilder>)builder;
@@ -740,6 +743,7 @@ FOR_EACH_PRIVATE_WKCONTENTVIEW_ACTION(DECLARE_WKCONTENTVIEW_ACTION_FOR_WEB_VIEW)
 - (void)_elementDidBlur;
 - (void)_didUpdateInputMode:(WebCore::InputMode)mode;
 - (void)_didUpdateEditorState;
+- (void)_didClearEditorStateAfterPageTransition;
 - (void)_hardwareKeyboardAvailabilityChanged;
 - (void)_selectionChanged;
 - (void)_updateChangedSelection;

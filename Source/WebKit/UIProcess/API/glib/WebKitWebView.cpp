@@ -25,6 +25,7 @@
 #include "APIContentWorld.h"
 #include "APIData.h"
 #include "APINavigation.h"
+#include "APIPageConfiguration.h"
 #include "APISerializedScriptValue.h"
 #include "ImageOptions.h"
 #include "NotificationService.h"
@@ -57,6 +58,7 @@
 #include "WebKitUIClient.h"
 #include "WebKitURIRequestPrivate.h"
 #include "WebKitURIResponsePrivate.h"
+#include "WebKitUserContentManagerPrivate.h"
 #include "WebKitUserMessagePrivate.h"
 #include "WebKitWebContextPrivate.h"
 #include "WebKitWebResourceLoadManager.h"
@@ -287,6 +289,7 @@ struct _WebKitWebViewPrivate {
     HashSet<unsigned> frameDisplayedCallbacksToRemove;
 #endif
 
+    RefPtr<API::PageConfiguration> configurationForNextRelatedView;
     WebKitWebView* relatedView;
     CString title;
     CString customTextEncoding;
@@ -780,6 +783,55 @@ static void webkitWebViewWatchForChangesInFavicon(WebKitWebView* webView)
 }
 #endif
 
+static Ref<API::PageConfiguration> webkitWebViewCreatePageConfiguration(WebKitWebView* webView)
+{
+    auto* priv = webView->priv;
+    auto pageConfiguration = API::PageConfiguration::create();
+    pageConfiguration->setProcessPool(&webkitWebContextGetProcessPool(priv->context.get()));
+    pageConfiguration->setPreferences(webkitSettingsGetPreferences(priv->settings.get()));
+    pageConfiguration->setRelatedPage(priv->relatedView ? &webkitWebViewGetPage(priv->relatedView) : nullptr);
+    pageConfiguration->setUserContentController(priv->userContentManager ? webkitUserContentManagerGetUserContentControllerProxy(priv->userContentManager.get()) : nullptr);
+    pageConfiguration->setControlledByAutomation(priv->isControlledByAutomation);
+
+    switch (priv->webExtensionMode) {
+    case WEBKIT_WEB_EXTENSION_MODE_MANIFESTV3:
+        pageConfiguration->setContentSecurityPolicyModeForExtension(WebCore::ContentSecurityPolicyModeForExtension::ManifestV3);
+        break;
+    case WEBKIT_WEB_EXTENSION_MODE_MANIFESTV2:
+        pageConfiguration->setContentSecurityPolicyModeForExtension(WebCore::ContentSecurityPolicyModeForExtension::ManifestV2);
+        break;
+    case WEBKIT_WEB_EXTENSION_MODE_NONE:
+        break;
+    }
+
+    if (!priv->defaultContentSecurityPolicy.isNull())
+        pageConfiguration->setOverrideContentSecurityPolicy(String::fromUTF8(priv->defaultContentSecurityPolicy.data()));
+
+#if ENABLE(2022_GLIB_API)
+    auto* manager = webkit_network_session_get_website_data_manager(priv->networkSession.get());
+#else
+    auto* manager = priv->websiteDataManager ? priv->websiteDataManager.get() : webkit_web_context_get_website_data_manager(priv->context.get());
+#endif
+    pageConfiguration->setWebsiteDataStore(&webkitWebsiteDataManagerGetDataStore(manager));
+
+    pageConfiguration->setDefaultWebsitePolicies(webkitWebsitePoliciesGetWebsitePolicies(priv->websitePolicies.get()));
+
+    return pageConfiguration;
+}
+
+static void webkitWebViewCreatePage(WebKitWebView* webView, Ref<API::PageConfiguration>&& configuration)
+{
+#if PLATFORM(GTK)
+    webkitWebViewBaseCreateWebPage(WEBKIT_WEB_VIEW_BASE(webView), WTFMove(configuration));
+#elif PLATFORM(WPE)
+#if ENABLE(WPE_PLATFORM)
+    webView->priv->view.reset(WKWPE::View::create(webView->priv->backend ? webkit_web_view_backend_get_wpe_backend(webView->priv->backend.get()) : nullptr, webkit_web_view_get_display(webView), configuration.get()));
+#else
+    webView->priv->view.reset(WKWPE::View::create(webkit_web_view_backend_get_wpe_backend(webView->priv->backend.get()), configuration.get()));
+#endif
+#endif
+}
+
 static void webkitWebViewConstructed(GObject* object)
 {
     G_OBJECT_CLASS(webkit_web_view_parent_class)->constructed(object);
@@ -855,7 +907,9 @@ static void webkitWebViewConstructed(GObject* object)
     if (!priv->websitePolicies)
         priv->websitePolicies = adoptGRef(webkit_website_policies_new());
 
-    webkitWebContextCreatePageForWebView(priv->context.get(), webView, priv->userContentManager.get(), priv->relatedView, priv->websitePolicies.get());
+    Ref configuration = priv->relatedView && priv->relatedView->priv->configurationForNextRelatedView ? priv->relatedView->priv->configurationForNextRelatedView.releaseNonNull() : webkitWebViewCreatePageConfiguration(webView);
+    webkitWebViewCreatePage(webView, WTFMove(configuration));
+    webkitWebContextWebViewCreated(priv->context.get(), webView);
 
     priv->loadObserver = makeUnique<PageLoadStateObserver>(webView);
     getPage(webView).pageLoadState().addObserver(*priv->loadObserver);
@@ -2444,19 +2498,6 @@ static void webkitWebViewCompleteAuthenticationRequest(WebKitWebView* webView)
     priv->authenticationRequest = nullptr;
 }
 
-void webkitWebViewCreatePage(WebKitWebView* webView, Ref<API::PageConfiguration>&& configuration)
-{
-#if PLATFORM(GTK)
-    webkitWebViewBaseCreateWebPage(WEBKIT_WEB_VIEW_BASE(webView), WTFMove(configuration));
-#elif PLATFORM(WPE)
-#if ENABLE(WPE_PLATFORM)
-    webView->priv->view.reset(WKWPE::View::create(webView->priv->backend ? webkit_web_view_backend_get_wpe_backend(webView->priv->backend.get()) : nullptr, webkit_web_view_get_display(webView), configuration.get()));
-#else
-    webView->priv->view.reset(WKWPE::View::create(webkit_web_view_backend_get_wpe_backend(webView->priv->backend.get()), configuration.get()));
-#endif
-#endif
-}
-
 WebPageProxy& webkitWebViewGetPage(WebKitWebView* webView)
 {
     return getPage(webView);
@@ -2581,21 +2622,27 @@ void webkitWebViewSetIcon(WebKitWebView* webView, const LinkIcon& icon, API::Dat
 }
 #endif
 
-RefPtr<WebPageProxy> webkitWebViewCreateNewPage(WebKitWebView* webView, const WindowFeatures& windowFeatures, WebKitNavigationAction* navigationAction)
+RefPtr<WebPageProxy> webkitWebViewCreateNewPage(WebKitWebView* webView, Ref<API::PageConfiguration>&& configuration, WindowFeatures&& windowFeatures, WebKitNavigationAction* navigationAction)
 {
+    RefPtr openerProcess = configuration->openerProcess();
+
+    ASSERT(!webView->priv->configurationForNextRelatedView);
+    SetForScope configurationScope(webView->priv->configurationForNextRelatedView, WTFMove(configuration));
+
     WebKitWebView* newWebView;
     g_signal_emit(webView, signals[CREATE], 0, navigationAction, &newWebView);
     if (!newWebView)
         return nullptr;
 
-    if (&getPage(webView).process() != &getPage(newWebView).process()) {
+    Ref newPage = getPage(newWebView);
+    if (&getPage(webView) != newPage->configuration().relatedPage() || openerProcess != newPage->configuration().openerProcess()) {
         g_warning("WebKitWebView returned by WebKitWebView::create signal was not created with the related WebKitWebView");
         return nullptr;
     }
 
     webkitWindowPropertiesUpdateFromWebWindowFeatures(newWebView->priv->windowProperties.get(), windowFeatures);
 
-    return &getPage(newWebView);
+    return newPage;
 }
 
 void webkitWebViewReadyToShowPage(WebKitWebView* webView)
@@ -3894,14 +3941,14 @@ void webkit_web_view_set_zoom_level(WebKitWebView* webView, gdouble zoomLevel)
         return;
 
 #if PLATFORM(GTK)
-    auto [pageScale, textScale] = webkitWebViewBaseGetScaleFactors(WEBKIT_WEB_VIEW_BASE(webView));
+    auto pageScale = webkitWebViewBaseGetPageScale(WEBKIT_WEB_VIEW_BASE(webView));
 #else
-    const double pageScale = 1.0, textScale = 1.0;
+    const double pageScale = 1.0;
 #endif
 
     auto& page = getPage(webView);
     if (webkit_settings_get_zoom_text_only(webView->priv->settings.get()))
-        page.setTextZoomFactor(zoomLevel * textScale);
+        page.setTextZoomFactor(zoomLevel);
     else
         page.setPageZoomFactor(zoomLevel * pageScale);
     g_object_notify_by_pspec(G_OBJECT(webView), sObjProperties[PROP_ZOOM_LEVEL]);
@@ -3923,14 +3970,14 @@ gdouble webkit_web_view_get_zoom_level(WebKitWebView* webView)
     g_return_val_if_fail(WEBKIT_IS_WEB_VIEW(webView), 1);
 
 #if PLATFORM(GTK)
-    auto [pageScale, textScale] = webkitWebViewBaseGetScaleFactors(WEBKIT_WEB_VIEW_BASE(webView));
+    auto pageScale = webkitWebViewBaseGetPageScale(WEBKIT_WEB_VIEW_BASE(webView));
 #else
-    const double pageScale = 1.0, textScale = 1.0;
+    const double pageScale = 1.0;
 #endif
 
     auto& page = getPage(webView);
     gboolean zoomTextOnly = webkit_settings_get_zoom_text_only(webView->priv->settings.get());
-    return zoomTextOnly ? page.textZoomFactor() / textScale : page.pageZoomFactor() / pageScale;
+    return zoomTextOnly ? page.textZoomFactor() : page.pageZoomFactor() / pageScale;
 }
 
 /**

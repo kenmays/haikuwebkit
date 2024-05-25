@@ -101,7 +101,7 @@ static HashMap<RegistrableDomain, String>& updatableStorageAccessUserAgentString
 static inline bool isYahooMail(Document& document)
 {
     auto host = document.topDocument().url().host();
-    return host.startsWith("mail."_s) && PublicSuffixStore::singleton().topPrivatelyControlledDomain(host.toString()).startsWith("yahoo."_s);
+    return host.startsWith("mail."_s) && PublicSuffixStore::singleton().topPrivatelyControlledDomain(host).startsWith("yahoo."_s);
 }
 #endif
 
@@ -229,7 +229,9 @@ bool Quirks::shouldTooltipPreventFromProceedingWithClick(const Element& element)
 
     if (!isDomain("covid.cdc.gov"_s))
         return false;
-    return element.hasClass() && element.classNames().contains("tooltip"_s);
+
+    static MainThreadNeverDestroyed<const AtomString> tooltipClass("tooltip"_s);
+    return element.hasClassName(tooltipClass.get());
 }
 
 // google.com https://bugs.webkit.org/show_bug.cgi?id=223700
@@ -240,7 +242,7 @@ bool Quirks::shouldHideSearchFieldResultsButton() const
     if (!needsQuirks())
         return false;
 
-    if (PublicSuffixStore::singleton().topPrivatelyControlledDomain(m_document->topDocument().url().host().toString()).startsWith("google."_s))
+    if (PublicSuffixStore::singleton().topPrivatelyControlledDomain(m_document->topDocument().url().host()).startsWith("google."_s))
         return true;
 #endif
     return false;
@@ -417,13 +419,13 @@ bool Quirks::shouldDisableElementFullscreenQuirk() const
 #if ENABLE(TOUCH_EVENTS)
 bool Quirks::isAmazon() const
 {
-    return PublicSuffixStore::singleton().topPrivatelyControlledDomain(m_document->topDocument().url().host().toString()).startsWith("amazon."_s);
+    return PublicSuffixStore::singleton().topPrivatelyControlledDomain(m_document->topDocument().url().host()).startsWith("amazon."_s);
 }
 
 bool Quirks::isGoogleMaps() const
 {
     auto& url = m_document->topDocument().url();
-    return PublicSuffixStore::singleton().topPrivatelyControlledDomain(url.host().toString()).startsWith("google."_s) && startsWithLettersIgnoringASCIICase(url.path(), "/maps/"_s);
+    return PublicSuffixStore::singleton().topPrivatelyControlledDomain(url.host()).startsWith("google."_s) && startsWithLettersIgnoringASCIICase(url.path(), "/maps/"_s);
 }
 
 // rdar://49124313
@@ -941,7 +943,7 @@ bool Quirks::shouldBypassBackForwardCache() const
                 static MainThreadNeverDestroyed<const AtomString> signInId("signIn"_s);
                 static MainThreadNeverDestroyed<const AtomString> loadingClass("loading"_s);
                 RefPtr signinButton = document->getElementById(signInId.get());
-                return signinButton && signinButton->classNames().contains(loadingClass.get());
+                return signinButton && signinButton->hasClassName(loadingClass.get());
             }
         }
     }
@@ -954,7 +956,7 @@ bool Quirks::shouldBypassBackForwardCache() const
     static MainThreadNeverDestroyed<const AtomString> googleDocsOverlayDivClass("docs-homescreen-freeze-el-full"_s);
     auto* firstChildInBody = document->body() ? document->body()->firstChild() : nullptr;
     if (RefPtr div = dynamicDowncast<HTMLDivElement>(firstChildInBody)) {
-        if (div->hasClass() && div->classNames().contains(googleDocsOverlayDivClass))
+        if (div->hasClassName(googleDocsOverlayDivClass))
             return true;
     }
 
@@ -1120,14 +1122,14 @@ bool Quirks::isMicrosoftTeamsRedirectURL(const URL& url)
 
 static bool elementHasClassInClosestAncestors(const Element& element, const AtomString& className, unsigned distance)
 {
-    if (element.hasClass() && element.classNames().contains(className))
+    if (element.hasClassName(className))
         return true;
 
     unsigned currentDistance = 0;
     RefPtr ancestor = dynamicDowncast<Element>(element.parentNode());
     while (ancestor && currentDistance < distance) {
         ++currentDistance;
-        if (ancestor->hasClass() && ancestor->classNames().contains(className))
+        if (ancestor->hasClassName(className))
             return true;
 
         ancestor = dynamicDowncast<Element>(ancestor->parentNode());
@@ -1193,7 +1195,7 @@ Quirks::StorageAccessResult Quirks::requestStorageAccessAndHandleClick(Completio
         return Quirks::StorageAccessResult::ShouldNotCancelEvent;
     }
 
-    document->addConsoleMessage(MessageSource::Other, MessageLevel::Info, makeString("requestStorageAccess is invoked on behalf of domain \"", domainInNeedOfStorageAccess.string(), "\""));
+    document->addConsoleMessage(MessageSource::Other, MessageLevel::Info, makeString("requestStorageAccess is invoked on behalf of domain \""_s, domainInNeedOfStorageAccess.string(), "\""_s));
     DocumentStorageAccess::requestStorageAccessForNonDocumentQuirk(*document, WTFMove(domainInNeedOfStorageAccess), [firstPartyDomain, domainInNeedOfStorageAccess, completionHandler = WTFMove(completionHandler)](StorageAccessWasGranted storageAccessGranted) mutable {
         if (storageAccessGranted == StorageAccessWasGranted::No) {
             completionHandler(ShouldDispatchClick::Yes);

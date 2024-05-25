@@ -2582,10 +2582,21 @@ class CheckStatusOfPR(buildstep.BuildStep, GitHubMixin, AddToLogMixin):
         failed_checks = []
         url = '{}status/{}/'.format(EWS_URL, change_id)
 
-        response = yield TwistedAdditions.request(url, logger=lambda content: self._addToLog('stdio', content))
-        if response and response.status_code // 100 != 2:
-            yield self._addToLog('stdio', f'Accessed {url} with unexpected status code {response.status_code}.\n')
-            return defer.returnValue(False if response.status_code // 100 == 4 else None)
+        for attempt in range(1, 4):
+            response = yield TwistedAdditions.request(url, logger=lambda content: self._addToLog('stdio', content))
+            if not response:
+                yield self._addToLog('stdio', f'Could not retrieve data from {url}.\n')
+                if attempt == 3:
+                    return defer.returnValue(None)
+                yield self._addToLog('stdio', f'Retrying, attempt {attempt + 1} of 3\n')
+            else:
+                if response.status_code // 100 != 2:
+                    yield self._addToLog('stdio', f'Accessed {url} with unexpected status code {response.status_code}.\n')
+                    if attempt == 3:
+                        return defer.returnValue(False if response.status_code // 100 == 4 else None)
+                    yield self._addToLog('stdio', f'Retrying, attempt {attempt + 1} of 3\n')
+                else:
+                    break
 
         # FIXME: safe-merge-queue should obtain skipped status from EWS instead of hardcoding
         queues_for_safe_merge = self.EMBEDDED_CHECKS + self.MACOS_CHECKS
@@ -2596,7 +2607,7 @@ class CheckStatusOfPR(buildstep.BuildStep, GitHubMixin, AddToLogMixin):
         for queue in queues_for_safe_merge:
             queue_data = response.json().get(queue, None)
             # jsc-arm7-tests will not set its status if skipped, so we condition on jsc-armv7
-            if queue == 'jsc-armv7-tests' and response.json().get('jsc-armv7', None).get('state', None) == 3:
+            if queue == 'jsc-armv7-tests' and response.json().get('jsc-armv7', {}).get('state', None) == 3:
                 yield self._addToLog('stdio', f'{queue}: Skipped\n')
             elif queue_data:
                 status = queue_data.get('state', None)
@@ -3019,9 +3030,13 @@ class RunResultsdbpyTests(shell.ShellCommandNewStyle):
         return {'step': 'Failed resultsdbpy unit tests'}
 
 
-class WebKitPyTest(shell.ShellCommandNewStyle, AddToLogMixin):
-    language = 'python'
+class RunWebKitPyTests(shell.ShellCommandNewStyle, AddToLogMixin):
+    name = 'webkitpy-tests'
     descriptionDone = ['webkitpy-tests']
+    description = ['webkitpy-tests']
+    jsonFileName = 'webkitpy_test_results.json'
+    logfiles = {'json': jsonFileName}
+    command = ['python3', 'Tools/Scripts/test-webkitpy', '--verbose', '--json-output={0}'.format(jsonFileName)]
     flunkOnFailure = True
     NUM_FAILURES_TO_DISPLAY = 10
 
@@ -3049,7 +3064,7 @@ class WebKitPyTest(shell.ShellCommandNewStyle, AddToLogMixin):
 
     def getResultSummary(self):
         if self.results == SUCCESS:
-            message = 'Passed webkitpy {} tests'.format(self.language)
+            message = 'Passed webkitpy tests'
             self.setBuildSummary(message)
             return {'step': message}
 
@@ -3066,29 +3081,11 @@ class WebKitPyTest(shell.ShellCommandNewStyle, AddToLogMixin):
             return super().getResultSummary()
         pluralSuffix = 's' if len(failures) > 1 else ''
         failures_string = ', '.join([failure.get('name') for failure in failures[:self.NUM_FAILURES_TO_DISPLAY]])
-        message = 'Found {} webkitpy {} test failure{}: {}'.format(len(failures), self.language, pluralSuffix, failures_string)
+        message = 'Found {} webkitpy test failure{}: {}'.format(len(failures), pluralSuffix, failures_string)
         if len(failures) > self.NUM_FAILURES_TO_DISPLAY:
             message += ' ...'
         self.setBuildSummary(message)
         return {'step': message}
-
-
-class RunWebKitPyPython2Tests(WebKitPyTest):
-    language = 'python2'
-    name = 'webkitpy-tests-{}'.format(language)
-    description = ['webkitpy-tests running ({})'.format(language)]
-    jsonFileName = 'webkitpy_test_{}_results.json'.format(language)
-    logfiles = {'json': jsonFileName}
-    command = ['python', 'Tools/Scripts/test-webkitpy', '--verbose', '--json-output={0}'.format(jsonFileName)]
-
-
-class RunWebKitPyPython3Tests(WebKitPyTest):
-    language = 'python3'
-    name = 'webkitpy-tests-{}'.format(language)
-    description = ['webkitpy-tests running ({})'.format(language)]
-    jsonFileName = 'webkitpy_test_{}_results.json'.format(language)
-    logfiles = {'json': jsonFileName}
-    command = ['python3', 'Tools/Scripts/test-webkitpy', '--verbose', '--json-output={0}'.format(jsonFileName)]
 
 
 class InstallGtkDependencies(shell.ShellCommandNewStyle):
@@ -3269,7 +3266,7 @@ class CompileWebKit(shell.Compile, AddToLogMixin, ShellMixin):
         steps_to_add = self.follow_up_steps()
 
         if cmd.didFail():
-            steps_to_add += [RevertAppliedChanges(), ValidateChange(verifyBugClosed=False, addURLs=False)]
+            steps_to_add += [RevertAppliedChanges(), CleanWorkingDirectory(), ValidateChange(verifyBugClosed=False, addURLs=False)]
             platform = self.getProperty('platform')
             if platform == 'wpe':
                 steps_to_add.append(InstallWpeDependencies())
@@ -3569,7 +3566,7 @@ class CompileJSCWithoutChange(CompileJSC):
         return shell.Compile.evaluateCommand(self, cmd)
 
 
-class RunJavaScriptCoreTests(shell.Test, AddToLogMixin):
+class RunJavaScriptCoreTests(shell.Test, AddToLogMixin, ShellMixin):
     name = 'jscore-test'
     description = ['jscore-tests running']
     descriptionDone = ['jscore-tests']
@@ -3583,7 +3580,7 @@ class RunJavaScriptCoreTests(shell.Test, AddToLogMixin):
     NUM_FAILURES_TO_DISPLAY_IN_STATUS = 5
 
     def __init__(self, **kwargs):
-        super().__init__(logEnviron=False, sigtermTime=10, **kwargs)
+        super().__init__(logEnviron=False, sigtermTime=10, timeout=2 * 60 * 60, **kwargs)
         self.binaryFailures = []
         self.stressTestFailures = []
         self.flaky = {}
@@ -3591,7 +3588,8 @@ class RunJavaScriptCoreTests(shell.Test, AddToLogMixin):
     def start(self):
         self.log_observer_json = logobserver.BufferLogObserver()
         self.addLogObserver('json', self.log_observer_json)
-
+        self.log_observer = logobserver.BufferLogObserver()
+        self.addLogObserver('stdio', self.log_observer)
 
         # add remotes configuration file path to the command line if needed
         remotesfile = self.getProperty('remotes', False)
@@ -3610,24 +3608,40 @@ class RunJavaScriptCoreTests(shell.Test, AddToLogMixin):
 
         self.setCommand(self.command + customBuildFlag(self.getProperty('platform'), self.getProperty('fullPlatform')))
         self.command.extend(self.command_extra)
+        self.command = self.shell_command(' '.join(self.command) + ' 2>&1 | python3 Tools/Scripts/filter-jsc-tests')
         return super().start()
 
     def evaluateCommand(self, cmd):
         rc = super().evaluateCommand(cmd)
+        steps_to_add = [
+            GenerateS3URL(
+                f"{self.getProperty('fullPlatform')}-{self.getProperty('architecture')}-{self.getProperty('configuration')}-{self.name}",
+                extension='txt',
+                content_type='text/plain',
+            ), UploadFileToS3(
+                'logs.txt',
+                links={self.name: 'Full logs'},
+                content_type='text/plain',
+            )
+        ]
+        if self.countFailures() != 0:
+            rc = FAILURE
         if rc == SUCCESS or rc == WARNINGS:
             message = 'Passed JSC tests'
             self.descriptionDone = message
             self.build.results = SUCCESS
-            self.build.buildFinished([message], SUCCESS)
         else:
-            self.build.addStepsAfterCurrentStep([
-                                                RevertAppliedChanges(),
-                                                ValidateChange(verifyBugClosed=False, addURLs=False),
-                                                CompileJSCWithoutChange(),
-                                                ValidateChange(verifyBugClosed=False, addURLs=False),
-                                                KillOldProcesses(),
-                                                RunJSCTestsWithoutChange(),
-                                                AnalyzeJSCTestsResults()])
+            steps_to_add += [
+                RevertAppliedChanges(),
+                CleanWorkingDirectory(),
+                ValidateChange(verifyBugClosed=False, addURLs=False),
+                CompileJSCWithoutChange(),
+                ValidateChange(verifyBugClosed=False, addURLs=False),
+                KillOldProcesses(),
+                RunJSCTestsWithoutChange(),
+                AnalyzeJSCTestsResults()
+            ]
+        self.build.addStepsAfterCurrentStep(steps_to_add)
         return rc
 
     def commandComplete(self, cmd):
@@ -3680,6 +3694,24 @@ class RunJavaScriptCoreTests(shell.Test, AddToLogMixin):
             return {'step': "Passed JSC tests (%d flaky)" % len(self.flaky)}
 
         return super().getResultSummary()
+
+    def countFailures(self):
+        logText = self.log_observer.getStdout()
+        count = 0
+
+        match = re.search(r'^Results for JSC stress tests:\r?\n\s+(\d+) failure', logText, re.MULTILINE)
+        if match:
+            count += int(match.group(1))
+
+        match = re.search(r'Results for JSC test binaries:\r?\n\s+(\d+) failure', logText, re.MULTILINE)
+        if match:
+            count += int(match.group(1))
+
+        match = re.search(r'^Results for Mozilla tests:\r?\n\s+(\d+) regression', logText, re.MULTILINE)
+        if match:
+            count += int(match.group(1))
+
+        return count
 
 
 class RunJSCTestsWithoutChange(RunJavaScriptCoreTests):
@@ -4110,6 +4142,7 @@ class RunWebKitTests(shell.Test, AddToLogMixin):
             else:
                 steps_to_add += [
                     RevertAppliedChanges(),
+                    CleanWorkingDirectory(),
                     ValidateChange(verifyBugClosed=False, addURLs=False),
                     CompileWebKitWithoutChange(retry_build_on_failure=True),
                     ValidateChange(verifyBugClosed=False, addURLs=False),
@@ -4250,6 +4283,7 @@ class ReRunWebKitTests(RunWebKitTests):
                                                 UploadTestResults(identifier='rerun'),
                                                 ExtractTestResults(identifier='rerun'),
                                                 RevertAppliedChanges(),
+                                                CleanWorkingDirectory(),
                                                 ValidateChange(verifyBugClosed=False, addURLs=False),
                                                 CompileWebKitWithoutChange(retry_build_on_failure=True),
                                                 ValidateChange(verifyBugClosed=False, addURLs=False),
@@ -4679,7 +4713,7 @@ class RunWebKitTestsRedTree(RunWebKitTests):
             if retry_count < AnalyzeLayoutTestsResultsRedTree.MAX_RETRY:
                 next_steps.append(AnalyzeLayoutTestsResultsRedTree())
             else:
-                next_steps.extend([RevertAppliedChanges()])
+                next_steps.extend([RevertAppliedChanges(), CleanWorkingDirectory()])
                 if platform == 'wpe':
                     next_steps.append(InstallWpeDependencies())
                 elif platform == 'gtk':
@@ -4723,7 +4757,9 @@ class RunWebKitTestsRepeatFailuresRedTree(RunWebKitTestsRedTree):
             next_steps.extend([
                 ValidateChange(verifyBugClosed=False, addURLs=False),
                 KillOldProcesses(),
-                RevertAppliedChanges()])
+                RevertAppliedChanges(),
+                CleanWorkingDirectory(),
+            ])
             if platform == 'wpe':
                 next_steps.append(InstallWpeDependencies())
             elif platform == 'gtk':
@@ -5249,7 +5285,7 @@ class ExtractBuiltProduct(shell.ShellCommandNewStyle):
         super().__init__(logEnviron=False, **kwargs)
 
 
-class RunAPITests(shell.TestNewStyle, AddToLogMixin):
+class RunAPITests(shell.TestNewStyle, AddToLogMixin, ShellMixin):
     name = 'run-api-tests'
     description = ['api tests running']
     descriptionDone = ['api-tests']
@@ -5268,9 +5304,10 @@ class RunAPITests(shell.TestNewStyle, AddToLogMixin):
     MSG_FOR_EXCESSIVE_LOGS_API_TEST = f'Stopped due to excessive logging, limit: {THRESHOLD_FOR_EXCESSIVE_LOGS_API_TESTS}'
 
     def __init__(self, **kwargs):
-        super().__init__(logEnviron=False, **kwargs)
+        super().__init__(logEnviron=False, timeout=3600, **kwargs)
         self.failing_tests_filtered = []
         self.preexisting_failures_in_results_db = []
+        self.steps_to_add = []
 
     @defer.inlineCallbacks
     def run(self):
@@ -5287,6 +5324,7 @@ class RunAPITests(shell.TestNewStyle, AddToLogMixin):
                            '--json-output={0}'.format(self.jsonFileName)]
         else:
             self.command = self.command + customBuildFlag(platform, self.getProperty('fullPlatform'))
+        self.command = self.shell_command(' '.join(self.command) + ' > logs.txt 2>&1 ; grep "Ran " logs.txt')
 
         rc = yield super().run()
 
@@ -5295,21 +5333,34 @@ class RunAPITests(shell.TestNewStyle, AddToLogMixin):
 
         yield self.analyze_failures_using_results_db()
 
+        self.steps_to_add += [
+            GenerateS3URL(
+                f"{self.getProperty('fullPlatform')}-{self.getProperty('architecture')}-{self.getProperty('configuration')}-{self.name}",
+                extension='txt',
+                content_type='text/plain',
+            ), UploadFileToS3(
+                'logs.txt',
+                links={self.name: 'Full logs'},
+                content_type='text/plain',
+            )
+        ]
+
         if rc in [SUCCESS, WARNINGS]:
             message = 'Passed API tests'
             self.descriptionDone = message
             if self.name != RunAPITestsWithoutChange.name:
                 self.build.results = SUCCESS
-                self.build.buildFinished([message], SUCCESS)
+                self.setProperty('build_summary', message)
         elif (self.name != RunAPITestsWithoutChange.name and self.preexisting_failures_in_results_db and len(self.failing_tests_filtered) == 0):
             # This means all the tests which failed in this run were also failing or flaky in results database
             message = f"Ignored pre-existing failure: {', '.join(self.preexisting_failures_in_results_db)}"
             self.descriptionDone = message
             self.build.results = SUCCESS
-            self.build.buildFinished([message], SUCCESS)
+            self.setProperty('build_summary', message)
         else:
             self.doOnFailure()
 
+        self.build.addStepsAfterCurrentStep(self.steps_to_add)
         defer.returnValue(rc)
 
     def parseOutputLine(self, line):
@@ -5356,11 +5407,11 @@ class RunAPITests(shell.TestNewStyle, AddToLogMixin):
             self.setProperty(f'results-db_{self.suffix}_pre_existing', sorted(self.preexisting_failures_in_results_db))
 
     def doOnFailure(self):
-        self.build.addStepsAfterCurrentStep([
+        self.steps_to_add += [
             ValidateChange(verifyBugClosed=False, addURLs=False),
             KillOldProcesses(),
             ReRunAPITests(),
-        ])
+        ]
 
     def parse_api_failures_from_string(self, string):
         if not string:
@@ -5428,19 +5479,17 @@ class ReRunAPITests(RunAPITests):
     suffix = 'second_run'
 
     def doOnFailure(self):
-        steps_to_add = [RevertAppliedChanges(), ValidateChange(verifyBugClosed=False, addURLs=False)]
+        self.steps_to_add = [RevertAppliedChanges(), CleanWorkingDirectory(), ValidateChange(verifyBugClosed=False, addURLs=False)]
         platform = self.getProperty('platform')
         if platform == 'wpe':
-            steps_to_add.append(InstallWpeDependencies())
+            self.steps_to_add.append(InstallWpeDependencies())
         elif platform == 'gtk':
-            steps_to_add.append(InstallGtkDependencies())
-        steps_to_add.append(CompileWebKitWithoutChange(retry_build_on_failure=True))
-        steps_to_add.append(ValidateChange(verifyBugClosed=False, addURLs=False))
-        steps_to_add.append(KillOldProcesses())
-        steps_to_add.append(RunAPITestsWithoutChange())
-        steps_to_add.append(AnalyzeAPITestsResults())
-        # Using a single addStepsAfterCurrentStep because of https://github.com/buildbot/buildbot/issues/4874
-        self.build.addStepsAfterCurrentStep(steps_to_add)
+            self.steps_to_add.append(InstallGtkDependencies())
+        self.steps_to_add.append(CompileWebKitWithoutChange(retry_build_on_failure=True))
+        self.steps_to_add.append(ValidateChange(verifyBugClosed=False, addURLs=False))
+        self.steps_to_add.append(KillOldProcesses())
+        self.steps_to_add.append(RunAPITestsWithoutChange())
+        self.steps_to_add.append(AnalyzeAPITestsResults())
 
 
 class RunAPITestsWithoutChange(RunAPITests):
@@ -5823,7 +5872,7 @@ class SetBuildSummary(buildstep.BuildStep):
         previous_build_summary = self.getProperty('build_summary', '')
         if RunWebKitTestsInStressMode.FAILURE_MSG_IN_STRESS_MODE in previous_build_summary:
             self.build.results = FAILURE
-        elif 'Committed ' in previous_build_summary and '@' in previous_build_summary:
+        elif any(s in previous_build_summary for s in ('Committed ', '@', 'Passed', 'Ignored pre-existing failure')):
             self.build.results = SUCCESS
         self.build.buildFinished([build_summary], self.build.results)
         return defer.succeed(None)

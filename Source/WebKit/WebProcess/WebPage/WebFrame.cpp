@@ -395,6 +395,8 @@ void WebFrame::loadDidCommitInAnotherProcess(std::optional<WebCore::LayerHosting
     if (corePage->focusController().focusedFrame() == localFrame.get())
         corePage->focusController().setFocusedFrame(newFrame.ptr(), FocusController::BroadcastFocusedFrame::No);
 
+    localFrame->loader().detachFromParent();
+
     if (ownerElement)
         ownerElement->scheduleInvalidateStyleAndLayerComposition();
 }
@@ -425,13 +427,14 @@ void WebFrame::createProvisionalFrame(ProvisionalFrameCreationParameters&& param
         setLayerHostingContextIdentifier(*parameters.layerHostingContextIdentifier);
 }
 
-void WebFrame::provisionalLoadFailed()
+void WebFrame::destroyProvisionalFrame()
 {
     if (RefPtr frame = std::exchange(m_provisionalFrame, nullptr)) {
         if (auto* client = toWebLocalFrameLoaderClient(frame->loader().client()))
             client->takeFrameInvalidator().release();
         if (RefPtr parent = frame->tree().parent())
             parent->tree().removeChild(*frame);
+        frame->loader().detachFromParent();
         frame->setView(nullptr);
     }
 }
@@ -456,6 +459,7 @@ void WebFrame::commitProvisionalFrame()
 
     RefPtr parent = remoteFrame->tree().parent();
     RefPtr ownerElement = remoteFrame->ownerElement();
+    auto* ownerRenderer = remoteFrame->ownerRenderer();
 
     if (parent)
         parent->tree().removeChild(*remoteFrame);
@@ -465,6 +469,10 @@ void WebFrame::commitProvisionalFrame()
     m_coreFrame = localFrame.get();
     remoteFrame->setView(nullptr);
     localFrame->tree().setSpecifiedName(remoteFrame->tree().specifiedName());
+
+    if (ownerRenderer)
+        ownerRenderer->setWidget(localFrame->view());
+
     localFrame->setOwnerElement(ownerElement.get());
     if (remoteFrame->isMainFrame())
         corePage->setMainFrame(*localFrame);

@@ -44,7 +44,13 @@ enum class TrustedType : int8_t {
     TrustedScriptURL,
 };
 
+struct AttributeTypeAndSink {
+    String attributeType;
+    String sink;
+};
+
 ASCIILiteral trustedTypeToString(TrustedType);
+TrustedType stringToTrustedType(String);
 ASCIILiteral trustedTypeToCallbackName(TrustedType);
 
 WEBCORE_EXPORT std::variant<std::monostate, Exception, Ref<TrustedHTML>, Ref<TrustedScript>, Ref<TrustedScriptURL>> processValueWithDefaultPolicy(ScriptExecutionContext&, TrustedType, const String& input, const String& sink);
@@ -53,10 +59,13 @@ WEBCORE_EXPORT ExceptionOr<String> trustedTypeCompliantString(TrustedType, Scrip
 
 WEBCORE_EXPORT ExceptionOr<String> requireTrustedTypesForPreNavigationCheckPasses(ScriptExecutionContext&, const String& urlString);
 
+ExceptionOr<String> trustedTypeCompliantString(ScriptExecutionContext&, std::variant<RefPtr<TrustedHTML>, String>&&, const String& sink);
+
 ExceptionOr<String> trustedTypeCompliantString(ScriptExecutionContext&, std::variant<RefPtr<TrustedScript>, String>&&, const String& sink);
 
 ExceptionOr<String> trustedTypeCompliantString(ScriptExecutionContext&, std::variant<RefPtr<TrustedScriptURL>, String>&&, const String& sink);
 
 ExceptionOr<RefPtr<Text>> processNodeOrStringAsTrustedType(Ref<Document>, RefPtr<Node> parent, std::variant<RefPtr<Node>, String, RefPtr<TrustedScript>>);
 
+WEBCORE_EXPORT AttributeTypeAndSink trustedTypeForAttribute(const String& elementName, const String& attributeName, const String& elementNamespace, const String& attributeNamespace);
 } // namespace WebCore

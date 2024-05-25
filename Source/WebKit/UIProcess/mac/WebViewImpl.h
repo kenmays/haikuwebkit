@@ -104,6 +104,11 @@ class Object;
 class PageConfiguration;
 }
 
+namespace PAL {
+class HysteresisActivity;
+enum class HysteresisState : bool;
+}
+
 namespace WebCore {
 class DestinationColorSpace;
 class IntPoint;
@@ -154,6 +159,10 @@ struct TranslationContextMenuInfo;
 - (void)_didHandleAcceptedCandidate;
 - (void)_didUpdateCandidateListVisibility:(BOOL)visible;
 
+#if ENABLE(UNIFIED_TEXT_REPLACEMENT)
+- (BOOL)_web_wantsCompleteUnifiedTextReplacementBehavior;
+#endif
+
 @end
 
 namespace WebCore {
@@ -180,6 +189,10 @@ struct WebHitTestResultData;
 
 enum class ContinueUnsafeLoad : bool;
 enum class UndoOrRedo : bool;
+
+#if ENABLE(UNIFIED_TEXT_REPLACEMENT)
+enum class WebUnifiedTextReplacementBehavior : uint8_t;
+#endif
 
 typedef id <NSValidatedUserInterfaceItem> ValidationItem;
 typedef Vector<RetainPtr<ValidationItem>> ValidationVector;
@@ -383,6 +396,9 @@ public:
     bool validateUserInterfaceItem(id <NSValidatedUserInterfaceItem>);
     void setEditableElementIsFocused(bool);
 
+    enum class ContentRelativeChildViewsSuppressionType : uint8_t { Remove, Restore, TemporarilyRemove };
+    void suppressContentRelativeChildViews(ContentRelativeChildViewsSuppressionType);
+
 #if HAVE(REDESIGNED_TEXT_CURSOR)
     void updateCursorAccessoryPlacement();
 #endif
@@ -492,10 +508,6 @@ public:
     void shareSheetDidDismiss(WKShareSheet *);
 
     _WKRemoteObjectRegistry *remoteObjectRegistry();
-
-ALLOW_DEPRECATED_DECLARATIONS_BEGIN
-    WKBrowsingContextController *browsingContextController();
-ALLOW_DEPRECATED_DECLARATIONS_END
 
 #if ENABLE(DRAG_SUPPORT)
     void draggedImage(NSImage *, CGPoint endPoint, NSDragOperation);
@@ -699,6 +711,10 @@ ALLOW_DEPRECATED_DECLARATIONS_END
     void handleContextMenuTranslation(const WebCore::TranslationContextMenuInfo&);
 #endif
 
+#if ENABLE(UNIFIED_TEXT_REPLACEMENT)
+    WebUnifiedTextReplacementBehavior unifiedTextReplacementBehavior() const;
+#endif
+
 #if ENABLE(UNIFIED_TEXT_REPLACEMENT) && ENABLE(CONTEXT_MENUS)
     bool canHandleSwapCharacters() const;
     void handleContextMenuSwapCharacters(WebCore::IntRect selectionBoundsInRootView);
@@ -726,23 +742,9 @@ ALLOW_DEPRECATED_DECLARATIONS_END
 #endif
 
 #if ENABLE(UNIFIED_TEXT_REPLACEMENT)
-    void willBeginTextReplacementSession(const WTF::UUID&, WebUnifiedTextReplacementType, CompletionHandler<void(const Vector<WebUnifiedTextReplacementContextData>&)>&&);
+    bool wantsCompleteUnifiedTextReplacementBehavior() const;
 
-    void didBeginTextReplacementSession(const WTF::UUID&, const Vector<WebUnifiedTextReplacementContextData>&);
-
-    void textReplacementSessionDidReceiveReplacements(const WTF::UUID&, const Vector<WebTextReplacementData>&, const WebUnifiedTextReplacementContextData&, bool finished);
-
-    void textReplacementSessionDidUpdateStateForReplacement(const WTF::UUID&, WebTextReplacementDataState, const WebTextReplacementData&, const WebUnifiedTextReplacementContextData&);
-
-    void didEndTextReplacementSession(const WTF::UUID&, bool accepted);
-
-    void textReplacementSessionDidReceiveTextWithReplacementRange(const WTF::UUID&, const WebCore::AttributedString&, const WebCore::CharacterRange&, const WebUnifiedTextReplacementContextData&);
-
-    void textReplacementSessionDidReceiveEditAction(const WTF::UUID&, WebTextReplacementDataEditAction);
-#endif
-
-#if ENABLE(UNIFIED_TEXT_REPLACEMENT_UI)
-    void addTextIndicatorStyleForID(WTF::UUID, WKTextIndicatorStyleType);
+    void addTextIndicatorStyleForID(WTF::UUID, const WebKit::TextIndicatorStyleData&);
     void removeTextIndicatorStyleForID(WTF::UUID);
 #endif
 
@@ -763,6 +765,11 @@ private:
     void installImageAnalysisOverlayView(VKCImageAnalysis *);
     void uninstallImageAnalysisOverlayView();
 #endif
+
+    bool hasContentRelativeChildViews() const;
+
+    void suppressContentRelativeChildViews();
+    void restoreContentRelativeChildViews();
 
     bool m_clientWantsMediaPlaybackControlsView { false };
     bool m_canCreateTouchBars { false };
@@ -827,6 +834,8 @@ private:
 #endif
 
     NSTextCheckingTypes getTextCheckingTypes() const;
+
+    void contentRelativeViewsHysteresisTimerFired(PAL::HysteresisState);
 
     void flushPendingMouseEventCallbacks();
 
@@ -901,6 +910,8 @@ private:
     id m_flagsChangedEventMonitor { nullptr };
 
     std::unique_ptr<WebCore::TextIndicatorWindow> m_textIndicatorWindow;
+
+    std::unique_ptr<PAL::HysteresisActivity> m_contentRelativeViewsHysteresis;
 
     RetainPtr<NSColorSpace> m_colorSpace;
 

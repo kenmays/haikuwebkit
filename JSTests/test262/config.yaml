@@ -12,6 +12,7 @@ flags:
   import-assertions: useImportAttributes
   json-modules: useImportAttributes
   promise-with-resolvers: usePromiseWithResolversMethod
+  promise-try: usePromiseTryMethod
 skip:
   features:
     - callable-boundary-realms
@@ -883,6 +884,3 @@ skip:
     - test/built-ins/Temporal/PlainTime/prototype/until/argument-zoneddatetime-timezone-getoffsetnanosecondsfor-not-callable.js
     - test/built-ins/Temporal/PlainTime/prototype/until/argument-zoneddatetime-timezone-getoffsetnanosecondsfor-out-of-range.js
     - test/built-ins/Temporal/PlainTime/prototype/until/argument-zoneddatetime-timezone-getoffsetnanosecondsfor-wrong-type.js
-
-    # Skip while https://bugs.webkit.org/show_bug.cgi?id=249330 is being investigated
-    - test/built-ins/RegExp/named-groups/lookbehind.js

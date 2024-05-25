@@ -27,7 +27,9 @@
 #include "LLIntData.h"
 
 #include "ArithProfile.h"
+#include "BaselineJITCode.h"
 #include "CodeBlock.h"
+#include "DFGJITCode.h"
 #include "JSCConfig.h"
 #include "LLIntCLoop.h"
 #include "LLIntEntrypoint.h"
@@ -48,7 +50,7 @@ Opcode g_opcodeMapWide16[numOpcodeIDs + numWasmOpcodeIDs] = { };
 Opcode g_opcodeMapWide32[numOpcodeIDs + numWasmOpcodeIDs] = { };
 
 #if !ENABLE(C_LOOP)
-extern "C" void llint_entry(void*, void*, void*);
+extern "C" void SYSV_ABI llint_entry(void*, void*, void*);
 
 #if ENABLE(WEBASSEMBLY)
 extern "C" void wasm_entry(void*, void*, void*);
@@ -285,8 +287,8 @@ void Data::performAssertions(VM& vm)
 
     ASSERT(!CallFrame::callerFrameOffset());
     STATIC_ASSERT(CallerFrameAndPC::sizeInRegisters == (MachineRegisterSize * 2) / SlotSize);
-    ASSERT(CallFrame::returnPCOffset() == CallFrame::callerFrameOffset() + MachineRegisterSize);
-    ASSERT(static_cast<std::underlying_type_t<CallFrameSlot>>(CallFrameSlot::codeBlock) * sizeof(Register) == CallFrame::returnPCOffset() + MachineRegisterSize);
+    static_assert(CallFrame::returnPCOffset() == CallFrame::callerFrameOffset() + MachineRegisterSize);
+    static_assert(static_cast<std::underlying_type_t<CallFrameSlot>>(CallFrameSlot::codeBlock) * sizeof(Register) == CallFrame::returnPCOffset() + MachineRegisterSize);
     STATIC_ASSERT(CallFrameSlot::callee * sizeof(Register) == CallFrameSlot::codeBlock * sizeof(Register) + SlotSize);
     STATIC_ASSERT(CallFrameSlot::argumentCountIncludingThis * sizeof(Register) == CallFrameSlot::callee * sizeof(Register) + SlotSize);
     STATIC_ASSERT(CallFrameSlot::thisArgument * sizeof(Register) == CallFrameSlot::argumentCountIncludingThis * sizeof(Register) + SlotSize);
@@ -367,6 +369,12 @@ void Data::performAssertions(VM& vm)
         ASSERT(arithProfile.lhsObservedType().isOnlyInt32());
         ASSERT(arithProfile.rhsObservedType().isOnlyNumber());
     }
+
+#if ENABLE(DFG_JIT)
+    // We share the same layout for particular fields in all JITData to make our data IC assume this.
+    RELEASE_ASSERT(BaselineJITData::offsetOfGlobalObject() == DFG::JITData::offsetOfGlobalObject());
+    RELEASE_ASSERT(BaselineJITData::offsetOfStackOffset() == DFG::JITData::offsetOfStackOffset());
+#endif
 }
 IGNORE_WARNINGS_END
 

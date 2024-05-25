@@ -33,6 +33,7 @@
 #include <WebCore/PlatformPlaybackSessionInterface.h>
 #include <WebCore/PlaybackSessionModel.h>
 #include <WebCore/TimeRanges.h>
+#include <WebCore/VideoReceiverEndpoint.h>
 #include <wtf/HashCountedSet.h>
 #include <wtf/HashMap.h>
 #include <wtf/HashSet.h>
@@ -44,6 +45,7 @@ namespace WebKit {
 
 class WebPageProxy;
 class PlaybackSessionManagerProxy;
+class VideoReceiverEndpointMessage;
 
 class PlaybackSessionModelContext final: public RefCounted<PlaybackSessionModelContext>, public WebCore::PlaybackSessionModel  {
 public:
@@ -51,7 +53,7 @@ public:
     {
         return adoptRef(*new PlaybackSessionModelContext(manager, contextId));
     }
-    virtual ~PlaybackSessionModelContext() { }
+    virtual ~PlaybackSessionModelContext();
 
     // PlaybackSessionModel
     void addClient(WebCore::PlaybackSessionModelClient&) final;
@@ -77,6 +79,7 @@ public:
     void isInWindowFullscreenActiveChanged(bool);
 
     bool wirelessVideoPlaybackDisabled() const final { return m_wirelessVideoPlaybackDisabled; }
+    const WebCore::VideoReceiverEndpoint& videoReceiverEndpoint() { return m_videoReceiverEndpoint; }
 
 private:
     friend class PlaybackSessionManagerProxy;
@@ -141,6 +144,9 @@ private:
     bool isPictureInPictureActive() const final { return m_pictureInPictureActive; }
     bool isInWindowFullscreenActive() const final { return m_isInWindowFullscreenActive; }
 
+    WebCore::AudioSessionSoundStageSize soundStageSize() const final { return m_soundStageSize; }
+    void setSoundStageSize(WebCore::AudioSessionSoundStageSize) final;
+
 #if !RELEASE_LOG_DISABLED
     void setLogIdentifier(const void* identifier) { m_logIdentifier = identifier; }
     const void* logIdentifier() const final { return m_logIdentifier; }
@@ -179,6 +185,8 @@ private:
     bool m_pictureInPictureSupported { false };
     bool m_pictureInPictureActive { false };
     bool m_isInWindowFullscreenActive { false };
+    WebCore::VideoReceiverEndpoint m_videoReceiverEndpoint;
+    WebCore::AudioSessionSoundStageSize m_soundStageSize { 0 };
 
 #if !RELEASE_LOG_DISABLED
     const void* m_logIdentifier { nullptr };
@@ -276,6 +284,9 @@ private:
 #endif
     void addNowPlayingMetadataObserver(PlaybackSessionContextIdentifier, const WebCore::NowPlayingMetadataObserver&);
     void removeNowPlayingMetadataObserver(PlaybackSessionContextIdentifier, const WebCore::NowPlayingMetadataObserver&);
+    void setSoundStageSize(PlaybackSessionContextIdentifier, WebCore::AudioSessionSoundStageSize);
+
+    void uncacheVideoReceiverEndpoint(PlaybackSessionContextIdentifier);
 
 #if !RELEASE_LOG_DISABLED
     void setLogIdentifier(PlaybackSessionContextIdentifier, uint64_t);

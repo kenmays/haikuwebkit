@@ -444,7 +444,7 @@ void CurlHandle::appendRequestHeader(const String& name, const String& value)
         // Insert the ; to tell curl that this header has an empty value.
         header = makeString(name, ';');
     } else {
-        header = makeString(name, ": ", value);
+        header = makeString(name, ": "_s, value);
     }
 
     appendRequestHeader(WTFMove(header));
@@ -920,7 +920,7 @@ void CurlHandle::addExtraNetworkLoadMetrics(NetworkLoadMetrics& networkLoadMetri
     additionalMetrics->responseHeaderBytesReceived = responseHeaderSize;
 
     if (ip)
-        additionalMetrics->remoteAddress = port ? makeString(ip, ':', port) : String::fromLatin1(ip);
+        additionalMetrics->remoteAddress = port ? makeString(span(ip), ':', port) : String::fromLatin1(ip);
 
     if (m_tlsConnectionInfo) {
         additionalMetrics->tlsProtocol = m_tlsConnectionInfo->protocol;

@@ -46,6 +46,9 @@ struct AppHighlight;
 
 namespace WebKit {
 
+struct TextIndicatorStyleData;
+enum class TextIndicatorStyle : uint8_t;
+
 class PageClientImplCocoa : public PageClient {
 public:
     PageClientImplCocoa(WKWebView *);
@@ -97,6 +100,7 @@ public:
 #endif
 
 #if ENABLE(UNIFIED_TEXT_REPLACEMENT)
+    void addTextIndicatorStyleForID(const WTF::UUID&, const WebKit::TextIndicatorStyleData&) final;
     void removeTextIndicatorStyleForID(const WTF::UUID&) final;
 #endif
 
@@ -118,6 +122,13 @@ public:
     void textReplacementSessionShowInformationForReplacementWithUUIDRelativeToRect(const WTF::UUID& sessionUUID, const WTF::UUID& replacementUUID, WebCore::IntRect selectionBoundsInRootView) final;
 
     void textReplacementSessionUpdateStateForReplacementWithUUID(const WTF::UUID& sessionUUID, WebTextReplacementDataState, const WTF::UUID& replacementUUID) final;
+
+    void unifiedTextReplacementActiveWillChange() final;
+    void unifiedTextReplacementActiveDidChange() final;
+#endif
+
+#if ENABLE(GAMEPAD)
+    void setGamepadsRecentlyAccessed(GamepadsRecentlyAccessed) final;
 #endif
 
 protected:

@@ -120,26 +120,27 @@ class PolymorphicAccess {
 public:
     friend class InlineCacheCompiler;
 
+    using ListType = Vector<Ref<AccessCase>, 16>;
+
     PolymorphicAccess();
     ~PolymorphicAccess();
 
     // When this fails (returns GaveUp), this will leave the old stub intact but you should not try
     // to call this method again for that PolymorphicAccess instance.
-    AccessGenerationResult addCases(
-        const GCSafeConcurrentJSLocker&, VM&, CodeBlock*, StructureStubInfo&, Vector<RefPtr<AccessCase>, 2>);
+    AccessGenerationResult addCases(const GCSafeConcurrentJSLocker&, VM&, CodeBlock*, StructureStubInfo&, ListType&&);
 
     AccessGenerationResult addCase(
         const GCSafeConcurrentJSLocker&, VM&, CodeBlock*, StructureStubInfo&, Ref<AccessCase>);
 
     bool isEmpty() const { return m_list.isEmpty(); }
     unsigned size() const { return m_list.size(); }
-    const AccessCase& at(unsigned i) const { return *m_list[i]; }
-    const AccessCase& operator[](unsigned i) const { return *m_list[i]; }
+    const AccessCase& at(unsigned i) const { return m_list[i].get(); }
+    const AccessCase& operator[](unsigned i) const { return m_list[i].get(); }
 
     DECLARE_VISIT_AGGREGATE;
 
     // If this returns false then we are requesting a reset of the owning StructureStubInfo.
-    bool visitWeak(VM&) const;
+    bool visitWeak(VM&);
 
     // This returns true if it has marked everything it will ever marked. This can be used as an
     // optimization to then avoid calling this method again during the fixpoint.
@@ -152,24 +153,21 @@ private:
     friend class CodeBlock;
     friend class InlineCacheCompiler;
 
-    typedef Vector<RefPtr<AccessCase>, 2> ListType;
-
     ListType m_list;
     RefPtr<PolymorphicAccessJITStubRoutine> m_stubRoutine;
 };
 
-class InlineCacheHandler final : public RefCounted<InlineCacheHandler> {
+class InlineCacheHandler final : public RefCounted<InlineCacheHandler>, public TrailingArray<InlineCacheHandler, DataOnlyCallLinkInfo> {
     WTF_MAKE_NONCOPYABLE(InlineCacheHandler);
     friend class InlineCacheCompiler;
 public:
-    static ptrdiff_t offsetOfCallTarget() { return OBJECT_OFFSETOF(InlineCacheHandler, m_callTarget); }
-    static ptrdiff_t offsetOfJumpTarget() { return OBJECT_OFFSETOF(InlineCacheHandler, m_jumpTarget); }
-    static ptrdiff_t offsetOfNext() { return OBJECT_OFFSETOF(InlineCacheHandler, m_next); }
+    using Base = TrailingArray<InlineCacheHandler, DataOnlyCallLinkInfo>;
 
-    static Ref<InlineCacheHandler> create(Ref<PolymorphicAccessJITStubRoutine>&& stubRoutine, std::unique_ptr<StructureStubInfoClearingWatchpoint>&& watchpoint)
-    {
-        return adoptRef(*new InlineCacheHandler(WTFMove(stubRoutine), WTFMove(watchpoint)));
-    }
+    static constexpr ptrdiff_t offsetOfCallTarget() { return OBJECT_OFFSETOF(InlineCacheHandler, m_callTarget); }
+    static constexpr ptrdiff_t offsetOfJumpTarget() { return OBJECT_OFFSETOF(InlineCacheHandler, m_jumpTarget); }
+    static constexpr ptrdiff_t offsetOfNext() { return OBJECT_OFFSETOF(InlineCacheHandler, m_next); }
+
+    static Ref<InlineCacheHandler> create(CodeBlock*, StructureStubInfo&, Ref<PolymorphicAccessJITStubRoutine>&&, std::unique_ptr<StructureStubInfoClearingWatchpoint>&&, unsigned callLinkInfoCount);
 
     CodePtr<JITStubRoutinePtrTag> callTarget() const { return m_callTarget; }
     CodePtr<JITStubRoutinePtrTag> jumpTarget() const { return m_jumpTarget; }
@@ -184,8 +182,10 @@ public:
         return m_stubRoutine->startAddress() <= pcAsInt && pcAsInt <= m_stubRoutine->endAddress();
     }
 
+    CallLinkInfo* callLinkInfoAt(const ConcurrentJSLocker&, unsigned index);
+
     // If this returns false then we are requesting a reset of the owning StructureStubInfo.
-    bool visitWeak(VM&) const;
+    bool visitWeak(VM&);
 
     void dump(PrintStream&) const;
 
@@ -194,14 +194,21 @@ public:
     void addOwner(CodeBlock*);
     void removeOwner(CodeBlock*);
 
+    static constexpr ptrdiff_t offsetOfUid() { return OBJECT_OFFSETOF(InlineCacheHandler, m_uid); }
+    static constexpr ptrdiff_t offsetOfCallLinkInfos() { return Base::offsetOfData(); }
+
 private:
-    InlineCacheHandler() = default;
-    InlineCacheHandler(Ref<PolymorphicAccessJITStubRoutine>&&, std::unique_ptr<StructureStubInfoClearingWatchpoint>&&);
+    InlineCacheHandler()
+        : Base(0)
+    { }
+
+    InlineCacheHandler(StructureStubInfo&, Ref<PolymorphicAccessJITStubRoutine>&&, std::unique_ptr<StructureStubInfoClearingWatchpoint>&&, unsigned callLinkInfoCount);
 
     static Ref<InlineCacheHandler> createSlowPath(VM&, AccessType);
 
     CodePtr<JITStubRoutinePtrTag> m_callTarget;
     CodePtr<JITStubRoutinePtrTag> m_jumpTarget;
+    UniquedStringImpl* m_uid { nullptr };
     RefPtr<PolymorphicAccessJITStubRoutine> m_stubRoutine;
     std::unique_ptr<StructureStubInfoClearingWatchpoint> m_watchpoint;
     RefPtr<InlineCacheHandler> m_next;
@@ -304,12 +311,12 @@ public:
     // Fall through on success. Two kinds of failures are supported: fall-through, which means that we
     // should try a different case; and failure, which means that this was the right case but it needs
     // help from the slow path.
-    void generateWithGuard(AccessCase&, MacroAssembler::JumpList& fallThrough);
+    void generateWithGuard(unsigned index, AccessCase&, MacroAssembler::JumpList& fallThrough);
 
     // Fall through on success, add a jump to the failure list on failure.
-    void generate(AccessCase&);
+    void generate(unsigned index, AccessCase&);
 
-    void generateImpl(AccessCase&);
+    void generateImpl(unsigned index, AccessCase&);
 
     static bool canEmitIntrinsicGetter(StructureStubInfo&, JSFunction*, Structure*);
 
@@ -331,7 +338,7 @@ private:
 
     void emitDOMJITGetter(GetterSetterAccessCase&, const DOMJIT::GetterSetter*, GPRReg baseForGetGPR);
     void emitModuleNamespaceLoad(ModuleNamespaceAccessCase&, MacroAssembler::JumpList& fallThrough);
-    void emitProxyObjectAccess(ProxyObjectAccessCase&, MacroAssembler::JumpList& fallThrough);
+    void emitProxyObjectAccess(unsigned index, ProxyObjectAccessCase&, MacroAssembler::JumpList& fallThrough);
     void emitIntrinsicGetter(IntrinsicGetterAccessCase&);
 
     VM& m_vm;
@@ -347,7 +354,6 @@ private:
     ScratchRegisterAllocator::PreservedState m_preservedReusedRegisterState;
     GPRReg m_scratchGPR { InvalidGPRReg };
     FPRReg m_scratchFPR { InvalidFPRReg };
-    Bag<OptimizingCallLinkInfo> m_callLinkInfos;
     ScalarRegisterSet m_liveRegistersToPreserveAtExceptionHandlingCallSite;
     ScalarRegisterSet m_liveRegistersForCall;
     CallSiteIndex m_callSiteIndex;
@@ -355,10 +361,9 @@ private:
     bool m_calculatedRegistersForCallAndExceptionHandling : 1 { false };
     bool m_needsToRestoreRegistersIfException : 1 { false };
     bool m_calculatedCallSiteIndex : 1 { false };
-    bool m_doesJSCalls : 1 { false };
-    bool m_doesCalls : 1 { false };
     Vector<StructureID, 4> m_weakStructures;
     Vector<ObjectPropertyCondition, 64> m_conditions;
+    Vector<std::unique_ptr<OptimizingCallLinkInfo>, 16> m_callLinkInfos;
 };
 
 } // namespace JSC

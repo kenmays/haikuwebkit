@@ -126,6 +126,11 @@ public:
     };
 #endif
 
+    struct TransparentContentData {
+        RefPtr<Node> node;
+        WTF::UUID uuid;
+    };
+
     using Data = std::variant<
         String
         , DictationData // DictationAlternatives
@@ -140,6 +145,7 @@ public:
 #if ENABLE(UNIFIED_TEXT_REPLACEMENT)
         , UnifiedTextReplacementData // UnifiedTextReplacement
 #endif
+        , TransparentContentData // TransparentContent
     >;
 
     DocumentMarker(Type, OffsetRange, Data&& = { });
@@ -217,7 +223,7 @@ inline String DocumentMarker::description() const
 
 #if ENABLE(UNIFIED_TEXT_REPLACEMENT)
     if (auto* data = std::get_if<DocumentMarker::UnifiedTextReplacementData>(&m_data))
-        return makeString("('", data->originalText, "', state: ", enumToUnderlyingType(data->state), ")");
+        return makeString("('"_s, data->originalText, "', state: "_s, enumToUnderlyingType(data->state), ')');
 #endif
 
     return emptyString();

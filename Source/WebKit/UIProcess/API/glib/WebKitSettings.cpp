@@ -155,6 +155,7 @@ enum {
 #if !ENABLE(2022_GLIB_API)
     PROP_ENABLE_ACCELERATED_2D_CANVAS,
 #endif
+    PROP_ENABLE_2D_CANVAS_ACCELERATION,
     PROP_ENABLE_WRITE_CONSOLE_MESSAGES_TO_STDOUT,
     PROP_ENABLE_MEDIA_STREAM,
     PROP_ENABLE_MOCK_CAPTURE_DEVICES,
@@ -356,6 +357,9 @@ ALLOW_DEPRECATED_DECLARATIONS_BEGIN
         ALLOW_DEPRECATED_DECLARATIONS_END
         break;
 #endif
+    case PROP_ENABLE_2D_CANVAS_ACCELERATION:
+        webkit_settings_set_enable_2d_canvas_acceleration(settings, g_value_get_boolean(value));
+        break;
     case PROP_ENABLE_WRITE_CONSOLE_MESSAGES_TO_STDOUT:
         webkit_settings_set_enable_write_console_messages_to_stdout(settings, g_value_get_boolean(value));
         break;
@@ -564,6 +568,9 @@ ALLOW_DEPRECATED_DECLARATIONS_BEGIN
         ALLOW_DEPRECATED_DECLARATIONS_END
         break;
 #endif
+    case PROP_ENABLE_2D_CANVAS_ACCELERATION:
+        g_value_set_boolean(value, webkit_settings_get_enable_2d_canvas_acceleration(settings));
+        break;
     case PROP_ENABLE_WRITE_CONSOLE_MESSAGES_TO_STDOUT:
         g_value_set_boolean(value, webkit_settings_get_enable_write_console_messages_to_stdout(settings));
         break;
@@ -1301,6 +1308,24 @@ static void webkit_settings_class_init(WebKitSettingsClass* klass)
             FALSE,
             static_cast<GParamFlags>(readWriteConstructParamFlags | G_PARAM_DEPRECATED));
 #endif
+
+    /**
+     * WebKitSettings:enable-2d-canvas-acceleration:
+     *
+     * Enable or disable 2D canvas acceleration.
+     * If this setting is enabled, the 2D canvas will be accelerated even if Skia CPU
+     * is used for rendering. However, the canvas can be unaccelerated even when this setting
+     * is enabled, for other reasons like its size or when willReadFrequently property is used.
+     *
+     * Since: 2.46
+     */
+    sObjProperties[PROP_ENABLE_2D_CANVAS_ACCELERATION] =
+        g_param_spec_boolean(
+            "enable-2d-canvas-acceleration",
+            _("Enable 2D canvas acceleration"),
+            _("Whether to enable 2D canvas acceleration"),
+            TRUE,
+            readWriteConstructParamFlags);
 
     /**
      * WebKitSettings:enable-write-console-messages-to-stdout:
@@ -3252,6 +3277,54 @@ void webkit_settings_set_enable_accelerated_2d_canvas(WebKitSettings* settings, 
 #endif
 
 /**
+ * webkit_settings_get_enable_2d_canvas_acceleration:
+ * @settings: a #WebKitSettings
+ *
+ * Get the #WebKitSettings:enable-2d-canvas-acceleration property.
+ *
+ * Returns: %TRUE if 2D canvas acceleration is enabled or %FALSE otherwise.
+ *
+ * Since: 2.46
+ */
+gboolean webkit_settings_get_enable_2d_canvas_acceleration(WebKitSettings* settings)
+{
+    g_return_val_if_fail(WEBKIT_IS_SETTINGS(settings), FALSE);
+
+#if USE(SKIA)
+    return settings->priv->preferences->canvasUsesAcceleratedDrawing();
+#else
+    return FALSE;
+#endif
+}
+
+/**
+ * webkit_settings_set_enable_2d_canvas_acceleration:
+ * @settings: a #WebKitSettings
+ * @enabled: Value to be set
+ *
+ * Set the #WebKitSettings:enable-2d-canvas-acceleration property.
+ *
+ * Since: 2.46
+ */
+void webkit_settings_set_enable_2d_canvas_acceleration(WebKitSettings* settings, gboolean enabled)
+{
+    g_return_if_fail(WEBKIT_IS_SETTINGS(settings));
+
+#if USE(SKIA)
+    WebKitSettingsPrivate* priv = settings->priv;
+    bool currentValue = priv->preferences->canvasUsesAcceleratedDrawing();
+    if (currentValue == enabled)
+        return;
+
+    priv->preferences->setCanvasUsesAcceleratedDrawing(enabled);
+    g_object_notify_by_pspec(G_OBJECT(settings), sObjProperties[PROP_ENABLE_2D_CANVAS_ACCELERATION]);
+#else
+    if (enabled)
+        g_warning("2D canvas acceleration not supported, webkit_settings_set_enable_2d_canvas_acceleration does nothing");
+#endif
+}
+
+/**
  * webkit_settings_get_enable_write_console_messages_to_stdout:
  * @settings: a #WebKitSettings
  *
@@ -4130,4 +4203,125 @@ WebKitFeatureList* webkit_settings_get_experimental_features(void)
 WebKitFeatureList* webkit_settings_get_development_features(void)
 {
     return webkitFeatureListCreate(WebPreferences::internalDebugFeatures());
+}
+
+/**
+ * webkit_settings_apply_from_key_file:
+ * @settings: a #WebKitSettings
+ * @key_file: a #GKeyFile
+ * @group_name: Name of the group to read from @key_file
+ * @error: return location for error or %NULL to ignore
+ *
+ * Reads the contents of the given @group_name from the given @key_file and apply the value of
+ * each key/value to the corresponding property on the @settings.
+ *
+ * Value types have to match with the corresponding setting property type and the group keys have to
+ * match existing setting property names. If those conditions are not met, the function will return
+ * %FALSE.
+ *
+ * Supported value types are strings (unquoted), booleans (0, 1, true, false) and unsigned integers.
+ *
+ * Returns: %TRUE if the settings were correctly applied or %FALSE on error.
+ *
+ * Since: 2.46
+ */
+gboolean webkit_settings_apply_from_key_file(WebKitSettings* settings, GKeyFile* keyFile, const gchar* groupName, GError** error)
+{
+    g_return_val_if_fail(WEBKIT_IS_SETTINGS(settings), FALSE);
+    g_return_val_if_fail(keyFile, FALSE);
+    g_return_val_if_fail(groupName, FALSE);
+    g_return_val_if_fail(!error || !*error, FALSE);
+
+    if (!g_key_file_has_group(keyFile, groupName)) {
+        g_set_error(error, G_KEY_FILE_ERROR, G_KEY_FILE_ERROR_INVALID_VALUE, "The key file has no %s group", groupName);
+        return FALSE;
+    }
+
+    auto klass = G_OBJECT_GET_CLASS(settings);
+    unsigned totalProperties = 0;
+    GUniquePtr<GParamSpec*> properties(g_object_class_list_properties(klass, &totalProperties));
+
+    GRefPtr<GPtrArray> propertyNames = adoptGRef(g_ptr_array_sized_new(totalProperties));
+    GRefPtr<GArray> values = adoptGRef(g_array_sized_new(FALSE, FALSE, sizeof(GValue), totalProperties));
+    g_array_set_clear_func(values.get(), reinterpret_cast<GDestroyNotify>(g_value_unset));
+
+    for (unsigned i = 0; i < totalProperties; i++) {
+        GUniqueOutPtr<GError> lookupError;
+        const char* name = properties.get()[i]->name;
+        if (!g_key_file_has_key(keyFile, groupName, name, &lookupError.outPtr())) {
+            if (lookupError) {
+                g_propagate_error(error, lookupError.release());
+                return FALSE;
+            }
+            continue; // Setting missing in GKeyFile, skip it.
+        }
+
+        GValue value = G_VALUE_INIT;
+        bool isValueSet = false;
+        switch (G_PARAM_SPEC_VALUE_TYPE(properties.get()[i])) {
+        case G_TYPE_BOOLEAN: {
+            bool boolValue = g_key_file_get_boolean(keyFile, groupName, name, &lookupError.outPtr());
+            if (!boolValue && lookupError) {
+                g_propagate_error(error, lookupError.release());
+                return FALSE;
+            }
+            g_value_init(&value, G_TYPE_BOOLEAN);
+            g_value_set_boolean(&value, boolValue);
+            isValueSet = true;
+            break;
+        }
+        case G_TYPE_UINT: {
+            guint64 uintValue = g_key_file_get_uint64(keyFile, groupName, name, &lookupError.outPtr());
+            if (!uintValue && lookupError) {
+                g_propagate_error(error, lookupError.release());
+                return FALSE;
+            }
+            if (uintValue > G_MAXUINT) {
+                g_set_error(error, G_KEY_FILE_ERROR, G_KEY_FILE_ERROR_INVALID_VALUE, "Value for '%s' exceeds maximum integer size", name);
+                return FALSE;
+            }
+            g_value_init(&value, G_TYPE_UINT);
+            g_value_set_uint(&value, static_cast<guint>(uintValue));
+            isValueSet = true;
+            break;
+        }
+        case G_TYPE_STRING: {
+            GUniquePtr<char> stringValue(g_key_file_get_string(keyFile, groupName, name, &lookupError.outPtr()));
+            if (!stringValue) {
+                g_assert(lookupError);
+                g_propagate_error(error, lookupError.release());
+                return FALSE;
+            }
+            g_value_init(&value, G_TYPE_STRING);
+            g_value_take_string(&value, stringValue.release());
+            isValueSet = true;
+            break;
+        }
+        default:
+            break;
+        }
+        if (isValueSet) {
+            g_ptr_array_add(propertyNames.get(), const_cast<char*>(name));
+            g_array_append_val(values.get(), value);
+        }
+    }
+
+    size_t length;
+    GUniqueOutPtr<GError> getKeysError;
+    GUniquePtr<char*> allKeys(g_key_file_get_keys(keyFile, groupName, &length, &getKeysError.outPtr()));
+    if (UNLIKELY(getKeysError)) {
+        g_propagate_error(error, getKeysError.release());
+        return FALSE;
+    }
+
+    for (unsigned i = 0; i < length; i++) {
+        auto key = allKeys.get()[i];
+        if (!g_ptr_array_find_with_equal_func(propertyNames.get(), static_cast<gconstpointer>(key), g_str_equal, nullptr)) {
+            g_set_error(error, G_KEY_FILE_ERROR, G_KEY_FILE_ERROR_INVALID_VALUE, "The %s group contains an invalid setting: %s", groupName, key);
+            return FALSE;
+        }
+    }
+
+    g_object_setv(G_OBJECT(settings), propertyNames->len, const_cast<const char**>(reinterpret_cast<char**>(propertyNames->pdata)), reinterpret_cast<GValue*>(values->data));
+    return TRUE;
 }

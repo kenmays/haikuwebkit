@@ -30,6 +30,7 @@
 #include "Chrome.h"
 #include "ChromeClient.h"
 #include "DocumentInlines.h"
+#include "FontCascade.h"
 #include "LocalFrame.h"
 #include "NodeTraversal.h"
 #include "Page.h"
@@ -94,6 +95,13 @@ void DocumentMarkerController::addDraggedContentMarker(const SimpleRange& range)
     // FIXME: Since the marker is already stored in a map keyed by node, we can probably change things around so we don't have to also store the node in the marker.
     for (auto& textPiece : collectTextRanges(range))
         addMarker(textPiece.node, { DocumentMarker::Type::DraggedContent, textPiece.range, RefPtr<Node> { textPiece.node.ptr() } });
+}
+
+void DocumentMarkerController::addTransparentContentMarker(const SimpleRange& range, WTF::UUID uuid)
+{
+    // FIXME: Since the marker is already stored in a map keyed by node, we can probably change things around so we don't have to also store the node in the marker.
+    for (auto& textPiece : collectTextRanges(range))
+        addMarker(textPiece.node, { DocumentMarker::Type::TransparentContent, textPiece.range, DocumentMarker::TransparentContentData { { textPiece.node.ptr() }, uuid } });
 }
 
 void DocumentMarkerController::removeMarkers(const SimpleRange& range, OptionSet<DocumentMarker::Type> types, RemovePartiallyOverlappingMarker overlapRule)
@@ -259,7 +267,7 @@ static bool shouldInsertAsSeparateMarker(const DocumentMarker& marker)
         return true;
 #endif
     case DocumentMarker::Type::TransparentContent:
-        return true;
+        return is<RenderReplaced>(std::get<DocumentMarker::TransparentContentData>(marker.data()).node->renderer());
 
     case DocumentMarker::Type::DraggedContent:
         return is<RenderReplaced>(std::get<RefPtr<Node>>(marker.data())->renderer());
@@ -823,6 +831,17 @@ void DocumentMarkerController::clearDescriptionOnMarkersIntersectingRange(const 
         marker.clearData();
         return false;
     });
+}
+
+std::tuple<float, float> DocumentMarkerController::markerYPositionAndHeightForFont(const FontCascade& font)
+{
+    auto ascent = font.metricsOfPrimaryFont().intAscent();
+    auto fontSize = std::clamp(font.size(), 10.0f, 40.0f);
+
+    auto y = ascent + 0.11035 * fontSize;
+    auto height = 0.13247 * fontSize;
+
+    return { y, height };
 }
 
 void addMarker(const SimpleRange& range, DocumentMarker::Type type, const DocumentMarker::Data& data)

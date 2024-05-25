@@ -63,14 +63,6 @@
 #ifdef __cplusplus
 #include <cstdlib>
 #include <type_traits>
-
-#if OS(WINDOWS)
-#if !COMPILER(GCC_COMPATIBLE)
-extern "C" void _ReadWriteBarrier(void);
-#pragma intrinsic(_ReadWriteBarrier)
-#endif
-#include <intrin.h>
-#endif
 #endif
 
 /* ASSERT_ENABLED is defined in PlatformEnable.h. */
@@ -109,16 +101,9 @@ extern "C" void _ReadWriteBarrier(void);
 #define VERBOSE_RELEASE_LOG ENABLE(JOURNALD_LOG)
 #endif
 
-#if COMPILER(GCC_COMPATIBLE)
 #define WTF_PRETTY_FUNCTION __PRETTY_FUNCTION__
-#else
-#define WTF_PRETTY_FUNCTION __FUNCTION__
-#endif
 
-#if COMPILER(MINGW)
-/* By default MinGW emits warnings when C99 format attributes are used, even if __USE_MINGW_ANSI_STDIO is defined */
-#define WTF_ATTRIBUTE_PRINTF(formatStringArgument, extraArguments) __attribute__((__format__(gnu_printf, formatStringArgument, extraArguments)))
-#elif COMPILER(GCC_COMPATIBLE) && !defined(__OBJC__)
+#if COMPILER(GCC_COMPATIBLE) && !defined(__OBJC__)
 /* WTF logging functions can process %@ in the format string to log a NSObject* but the printf format attribute
    emits a warning when %@ is used in the format string.  Until <rdar://problem/5195437> is resolved we can't include
    the attribute when being used from Objective-C code in case it decides to use %@. */
@@ -148,11 +133,7 @@ extern "C" {
 
    Signals are ignored by the crash reporter on OS X so we must do better.
 */
-#if COMPILER(GCC_COMPATIBLE) || COMPILER(MSVC)
 #define NO_RETURN_DUE_TO_CRASH NO_RETURN
-#else
-#define NO_RETURN_DUE_TO_CRASH
-#endif
 
 #ifdef __cplusplus
 enum class WTFLogChannelState : uint8_t { Off, On, OnWithAccumulation };
@@ -242,9 +223,6 @@ WTF_EXPORT_PRIVATE void WTFReportBacktraceWithPrefixAndPrintStream(WTF::PrintStr
 WTF_EXPORT_PRIVATE void WTFPrintBacktraceWithPrefixAndPrintStream(WTF::PrintStream&, void** stack, int size, const char* prefix);
 #endif
 WTF_EXPORT_PRIVATE void WTFPrintBacktrace(void** stack, int size);
-#if !RELEASE_LOG_DISABLED
-WTF_EXPORT_PRIVATE void WTFReleaseLogStackTrace(WTFLogChannel*);
-#endif
 
 WTF_EXPORT_PRIVATE bool WTFIsDebuggerAttached(void);
 
@@ -302,9 +280,7 @@ WTF_EXPORT_PRIVATE bool WTFIsDebuggerAttached(void);
 
 #endif // CPU(ARM64)
 
-#if COMPILER(MSVC)
-#define WTFBreakpointTrap()  __debugbreak()
-#elif ASAN_ENABLED
+#if ASAN_ENABLED
 #define WTFBreakpointTrap()  __builtin_trap()
 #elif CPU(X86_64) || CPU(X86)
 #define WTFBreakpointTrap()  asm volatile (WTF_FATAL_CRASH_INST)
@@ -316,11 +292,7 @@ WTF_EXPORT_PRIVATE bool WTFIsDebuggerAttached(void);
 #define WTFBreakpointTrap() WTFCrash() // Not implemented.
 #endif
 
-#if COMPILER(MSVC)
-#define WTFBreakpointTrapUnderConstexprContext() ((void) 0)
-#else
 #define WTFBreakpointTrapUnderConstexprContext() __builtin_trap()
-#endif
 
 #ifndef CRASH
 
@@ -638,8 +610,6 @@ constexpr bool assertionFailureDueToUnreachableCode = false;
 #define RELEASE_LOG_WITH_LEVEL(channel, level, ...) ((void)0)
 #define RELEASE_LOG_WITH_LEVEL_IF(isAllowed, channel, level, ...) do { if (isAllowed) RELEASE_LOG_WITH_LEVEL(channel, level, __VA_ARGS__); } while (0)
 
-#define RELEASE_LOG_STACKTRACE(channel) ((void)0)
-
 #elif USE(OS_LOG)
 
 #define PUBLIC_LOG_STRING "{public}s"
@@ -718,13 +688,10 @@ constexpr bool assertionFailureDueToUnreachableCode = false;
 #endif
 
 #if !RELEASE_LOG_DISABLED
-#define RELEASE_LOG_STACKTRACE(channel) WTFReleaseLogStackTrace(&LOG_CHANNEL(channel))
 #define RELEASE_LOG_IF(isAllowed, channel, ...) do { if (isAllowed) RELEASE_LOG(channel, __VA_ARGS__); } while (0)
 #define RELEASE_LOG_ERROR_IF(isAllowed, channel, ...) do { if (isAllowed) RELEASE_LOG_ERROR(channel, __VA_ARGS__); } while (0)
 #define RELEASE_LOG_INFO_IF(isAllowed, channel, ...) do { if (isAllowed) RELEASE_LOG_INFO(channel, __VA_ARGS__); } while (0)
 #define RELEASE_LOG_DEBUG_IF(isAllowed, channel, ...) do { if (isAllowed) RELEASE_LOG_DEBUG(channel, __VA_ARGS__); } while (0)
-
-#define RELEASE_LOG_STACKTRACE(channel) WTFReleaseLogStackTrace(&LOG_CHANNEL(channel))
 #endif
 
 /* ALWAYS_LOG */
@@ -882,11 +849,7 @@ WTF_EXPORT_PRIVATE void disableForwardingVPrintfStdErrToOSLog();
 
 inline void compilerFenceForCrash()
 {
-#if OS(WINDOWS) && !COMPILER(GCC_COMPATIBLE)
-    _ReadWriteBarrier();
-#else
     asm volatile("" ::: "memory");
-#endif
 }
 
 #ifndef CRASH_WITH_INFO

@@ -28,6 +28,7 @@
 
 #include "BackForwardItemIdentifier.h"
 #include "FloatRect.h"
+#include "FrameIdentifier.h"
 #include "FrameLoaderTypes.h"
 #include "IntPoint.h"
 #include "IntRect.h"
@@ -36,6 +37,7 @@
 #include "SerializedScriptValue.h"
 #include <memory>
 #include <wtf/RefCounted.h>
+#include <wtf/UUID.h>
 #include <wtf/WeakPtr.h>
 #include <wtf/text/WTFString.h>
 
@@ -82,10 +84,13 @@ public:
     WEBCORE_EXPORT Ref<HistoryItem> copy() const;
 
     const BackForwardItemIdentifier& identifier() const { return m_identifier; }
+    const WTF::UUID& uuidIdentifier() const { return m_uuidIdentifier; }
 
     // Resets the HistoryItem to its initial state, as returned by create().
     void reset();
-    
+
+    bool operator==(const HistoryItem& other) const { return identifier() == other.identifier(); }
+
     WEBCORE_EXPORT const String& originalURLString() const;
     WEBCORE_EXPORT const String& urlString() const;
     
@@ -97,6 +102,7 @@ public:
     WEBCORE_EXPORT URL originalURL() const;
     WEBCORE_EXPORT const String& referrer() const;
     WEBCORE_EXPORT const AtomString& target() const;
+    std::optional<FrameIdentifier> frameID() const { return m_frameID; }
     WEBCORE_EXPORT bool isTargetItem() const;
     
     WEBCORE_EXPORT FormData* formData();
@@ -126,6 +132,7 @@ public:
     WEBCORE_EXPORT void setOriginalURLString(const String&);
     WEBCORE_EXPORT void setReferrer(const String&);
     WEBCORE_EXPORT void setTarget(const AtomString&);
+    void setFrameID(std::optional<FrameIdentifier> frameID) { m_frameID = frameID; }
     WEBCORE_EXPORT void setIsTargetItem(bool);
     
     WEBCORE_EXPORT void setStateObject(RefPtr<SerializedScriptValue>&&);
@@ -149,6 +156,7 @@ public:
     WEBCORE_EXPORT void addChildItem(Ref<HistoryItem>&&);
     void setChildItem(Ref<HistoryItem>&&);
     WEBCORE_EXPORT HistoryItem* childItemWithTarget(const AtomString&);
+    WEBCORE_EXPORT HistoryItem* childItemWithFrameID(FrameIdentifier);
     HistoryItem* childItemWithDocumentSequenceNumber(long long number);
     WEBCORE_EXPORT const Vector<Ref<HistoryItem>>& children() const;
     void clearChildren();
@@ -227,6 +235,7 @@ private:
     String m_originalURLString;
     String m_referrer;
     AtomString m_target;
+    std::optional<FrameIdentifier> m_frameID;
     
     IntPoint m_scrollPosition;
     float m_pageScaleFactor { 0 }; // 0 indicates "unset".
@@ -283,6 +292,7 @@ private:
 #endif
 
     BackForwardItemIdentifier m_identifier;
+    WTF::UUID m_uuidIdentifier;
     std::optional<PolicyContainer> m_policyContainer;
     Ref<Client> m_client;
 };
