@@ -48,28 +48,25 @@ static constexpr GPRReg InvalidGPRReg { GPRReg::InvalidGPRReg };
 #if USE(JSVALUE64)
 class JSValueRegs {
 public:
-    constexpr JSValueRegs()
-        : m_gpr(InvalidGPRReg)
-    {
-    }
-    
+    constexpr JSValueRegs() = default;
+
     constexpr explicit JSValueRegs(GPRReg gpr)
         : m_gpr(gpr)
     {
     }
     
-    static JSValueRegs payloadOnly(GPRReg gpr)
+    static constexpr JSValueRegs payloadOnly(GPRReg gpr)
     {
         return JSValueRegs(gpr);
     }
     
-    static JSValueRegs withTwoAvailableRegs(GPRReg gpr, GPRReg)
+    static constexpr JSValueRegs withTwoAvailableRegs(GPRReg gpr, GPRReg)
     {
         return JSValueRegs(gpr);
     }
     
-    bool operator!() const { return m_gpr == InvalidGPRReg; }
-    explicit operator bool() const { return m_gpr != InvalidGPRReg; }
+    constexpr bool operator!() const { return m_gpr == InvalidGPRReg; }
+    explicit constexpr operator bool() const { return m_gpr != InvalidGPRReg; }
 
     friend constexpr bool operator==(const JSValueRegs&, const JSValueRegs&) = default;
 
@@ -87,8 +84,8 @@ public:
 
     void dump(PrintStream&) const;
     
-private:
-    GPRReg m_gpr;
+    // Intentionally public to make JSValueRegs usable for template parameters.
+    GPRReg m_gpr { InvalidGPRReg };
 };
 
 class JSValueSource {
@@ -167,12 +164,8 @@ private:
 #if USE(JSVALUE32_64)
 class JSValueRegs {
 public:
-    constexpr JSValueRegs()
-        : m_tagGPR(InvalidGPRReg)
-        , m_payloadGPR(InvalidGPRReg)
-    {
-    }
-    
+    constexpr JSValueRegs() = default;
+
     constexpr JSValueRegs(GPRReg tagGPR, GPRReg payloadGPR)
         : m_tagGPR(tagGPR)
         , m_payloadGPR(payloadGPR)
@@ -189,8 +182,8 @@ public:
         return JSValueRegs(InvalidGPRReg, payloadGPR);
     }
     
-    bool operator!() const { return !static_cast<bool>(*this); }
-    explicit operator bool() const
+    constexpr bool operator!() const { return !static_cast<bool>(*this); }
+    explicit constexpr operator bool() const
     {
         return static_cast<GPRReg>(m_tagGPR) != InvalidGPRReg
             || static_cast<GPRReg>(m_payloadGPR) != InvalidGPRReg;
@@ -223,11 +216,11 @@ public:
         return uses(other.payloadGPR()) || uses(other.tagGPR());
     }
 
-    void dump(PrintStream&) const;
-    
-private:
-    GPRReg m_tagGPR;
-    GPRReg m_payloadGPR;
+    JS_EXPORT_PRIVATE void dump(PrintStream&) const;
+
+    // Intentionally public to make JSValueRegs usable for template parameters.
+    GPRReg m_tagGPR { InvalidGPRReg };
+    GPRReg m_payloadGPR { InvalidGPRReg };
 };
 
 class JSValueSource {
@@ -490,8 +483,9 @@ public:
     static constexpr GPRReg nonPreservedNonReturnGPR = ARMRegisters::r5;
     static constexpr GPRReg nonPreservedNonArgumentGPR0 = ARMRegisters::r5;
     static constexpr GPRReg nonPreservedNonArgumentGPR1 = ARMRegisters::r4;
+    static constexpr GPRReg nonPreservedNonArgumentGPR2 = ARMRegisters::r9;
 
-    static constexpr GPRReg handlerGPR = InvalidGPRReg;
+    static constexpr GPRReg handlerGPR = GPRInfo::nonPreservedNonArgumentGPR2;
 
     static constexpr GPRReg wasmScratchGPR0 = regT5;
     static constexpr GPRReg wasmScratchGPR1 = regT6;
@@ -1036,6 +1030,53 @@ preferredArgumentJSR()
 {
     return PreferredArgumentImpl::preferredArgumentJSR<OperationType, ArgNum>();
 }
+
+template<typename RegisterBank, auto... registers>
+struct StaticScratchRegisterAllocator {
+    static_assert(noOverlap(registers...));
+    static constexpr size_t countRegisters(JSValueRegs)
+    {
+#if USE(JSVALUE32_64)
+        return 2;
+#else
+        return 1;
+#endif
+    }
+
+    static constexpr size_t countRegisters(typename RegisterBank::RegisterType)
+    {
+        return 1;
+    }
+
+    template<auto reg, auto... args>
+    static constexpr size_t countRegisters()
+    {
+        if constexpr (!sizeof...(args))
+            return countRegisters(reg);
+        else
+            return countRegisters(reg) + countRegisters<args...>();
+    }
+
+    static constexpr size_t size = RegisterBank::numberOfRegisters - countRegisters<registers...>();
+    using ArrayType = std::array<typename RegisterBank::RegisterType, size>;
+
+    static constexpr ArrayType constructScratchRegisters()
+    {
+        ArrayType array { };
+        unsigned resultIndex = 0;
+        for (unsigned index = 0; index < RegisterBank::numberOfRegisters; ++index) {
+            auto reg = RegisterBank::toRegister(index);
+            if (noOverlap(registers..., reg))
+                array[resultIndex++] = reg;
+        }
+        return array;
+    }
+
+    static constexpr ArrayType values { constructScratchRegisters() };
+};
+
+template<typename RegisterBank, auto... registers>
+inline constexpr auto allocatedScratchRegisters = StaticScratchRegisterAllocator<RegisterBank, registers...>::values;
 
 #endif // ENABLE(ASSEMBLER)
 

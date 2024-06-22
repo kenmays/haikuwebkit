@@ -51,6 +51,7 @@
 #include "ContentSecurityPolicy.h"
 #include "CrossOriginAccessControl.h"
 #include "CrossOriginEmbedderPolicy.h"
+#include "DNS.h"
 #include "DatabaseManager.h"
 #include "DiagnosticLoggingClient.h"
 #include "DiagnosticLoggingKeys.h"
@@ -1384,6 +1385,12 @@ void FrameLoader::loadFrameRequest(FrameLoadRequest&& request, Event* event, Ref
         reportBlockedLoadFailed(frame, url);
         return;
     }
+
+    if (isIPAddressDisallowed(url)) {
+        FRAMELOADER_RELEASE_LOG(ResourceLoading, "loadFrameRequest: canceling - IP address is not allowed");
+        reportBlockedLoadFailed(frame, url);
+        return;
+    }
     
     URL argsReferrer;
     String argsReferrerString = request.resourceRequest().httpReferrer();
@@ -1771,7 +1778,7 @@ void FrameLoader::loadWithDocumentLoader(DocumentLoader* loader, FrameLoadType t
 
     if (shouldPerformFragmentNavigation(isFormSubmission, httpMethod, policyChecker().loadType(), newURL)) {
 
-        if (!dispatchNavigateEvent(newURL, type, loader->triggeringAction(), NavigationHistoryBehavior::Auto, true))
+        if (!dispatchNavigateEvent(newURL, type, loader->triggeringAction(), NavigationHistoryBehavior::Auto, true, formState.get()))
             return;
 
         RefPtr oldDocumentLoader = m_documentLoader;
@@ -1787,6 +1794,12 @@ void FrameLoader::loadWithDocumentLoader(DocumentLoader* loader, FrameLoadType t
             continueFragmentScrollAfterNavigationPolicy(request, requesterOrigin.get(), navigationPolicyDecision == NavigationPolicyDecision::ContinueLoad, NavigationHistoryBehavior::Auto);
         }, PolicyDecisionMode::Synchronous);
         return;
+    }
+
+    auto& action = loader->triggeringAction();
+    if (m_frame->document() && action.requester() && m_frame->document()->securityOrigin().isSameOriginDomain(action.requester()->securityOrigin)) {
+        if (!dispatchNavigateEvent(newURL, type, action, NavigationHistoryBehavior::Auto, false, formState.get()))
+            return;
     }
 
     if (RefPtr parent = dynamicDowncast<LocalFrame>(frame->tree().parent()))
@@ -1841,7 +1854,8 @@ void FrameLoader::reportLocalLoadFailed(LocalFrame* frame, const String& url)
 void FrameLoader::reportBlockedLoadFailed(LocalFrame& frame, const URL& url)
 {
     ASSERT(!url.isEmpty());
-    auto message = makeString("Not allowed to use restricted network port "_s, url.port().value(), ": "_s, url.stringCenterEllipsizedToLength());
+    auto restrictedHostPort = isIPAddressDisallowed(url) ? makeString("host \""_s, url.host(), "\""_s) : makeString("port "_s, url.port().value());
+    auto message = makeString("Not allowed to use restricted network "_s, restrictedHostPort, ": "_s, url.stringCenterEllipsizedToLength());
     frame.protectedDocument()->addConsoleMessage(MessageSource::Security, MessageLevel::Error, message);
 }
 
@@ -3071,13 +3085,9 @@ String FrameLoader::userAgent(const URL& url) const
 
 String FrameLoader::navigatorPlatform() const
 {
-    if (RefPtr localFrame = dynamicDowncast<LocalFrame>(m_frame->mainFrame())) {
-        if (RefPtr documentLoader = localFrame->loader().activeDocumentLoader()) {
-            auto& customNavigatorPlatform = documentLoader->customNavigatorPlatform();
-            if (!customNavigatorPlatform.isEmpty())
-                return customNavigatorPlatform;
-        }
-    }
+    auto customNavigatorPlatform = m_frame->mainFrame().customNavigatorPlatform();
+    if (!customNavigatorPlatform.isEmpty())
+        return customNavigatorPlatform;
     return String();
 }
 
@@ -3261,7 +3271,7 @@ void FrameLoader::updateRequestAndAddExtraFields(Frame& targetFrame, ResourceReq
         request.setHTTPHeaderField(HTTPHeaderName::Accept, CachedResourceRequest::acceptHeaderValueFromType(CachedResource::Type::MainResource));
 
     if (document && localFrame->settings().privateTokenUsageByThirdPartyEnabled() && !localFrame->loader().client().isRemoteWorkerFrameLoaderClient())
-        request.setIsPrivateTokenUsageByThirdPartyAllowed(isPermissionsPolicyAllowedByDocumentAndAllOwners(PermissionsPolicy::Feature::PrivateToken, *document, LogPermissionsPolicyFailure::No));
+        request.setIsPrivateTokenUsageByThirdPartyAllowed(PermissionsPolicy::isFeatureEnabled(PermissionsPolicy::Feature::PrivateToken, *document, PermissionsPolicy::ShouldReportViolation::No));
 
     // Only set fallback array if it's still empty (later attempts may be incorrect, see bug 117818).
     if (document && request.responseContentDispositionEncodingFallbackArray().isEmpty()) {
@@ -3352,7 +3362,7 @@ void FrameLoader::addSameSiteInfoToRequestIfNeeded(ResourceRequest& request, con
         request.setIsSameSite(true);
         return;
     }
-    if (initiator->quirks().needsLaxSameSiteCookieQuirk()) {
+    if (initiator->quirks().needsLaxSameSiteCookieQuirk(request.url())) {
         request.setIsSameSite(true);
         return;
     }
@@ -3424,6 +3434,11 @@ void FrameLoader::loadPostRequest(FrameLoadRequest&& request, const String& refe
             completionHandler();
         });
         return;
+    }
+
+    if (request.requesterSecurityOrigin().isSameOriginDomain(frame->document()->securityOrigin())) {
+        if (!dispatchNavigateEvent(url, loadType, action, request.navigationHistoryBehavior(), false, formState.get()))
+            return;
     }
 
     // must grab this now, since this load may stop the previous load and clear this flag
@@ -4153,7 +4168,7 @@ RefPtr<Frame> FrameLoader::findFrameForNavigation(const AtomString& name, Docume
     return frame;
 }
 
-bool FrameLoader::dispatchNavigateEvent(const URL& newURL, FrameLoadType loadType, const NavigationAction& action, NavigationHistoryBehavior historyHandling, bool isSameDocument)
+bool FrameLoader::dispatchNavigateEvent(const URL& newURL, FrameLoadType loadType, const NavigationAction& action, NavigationHistoryBehavior historyHandling, bool isSameDocument, FormState* formState)
 {
     RefPtr document = m_frame->document();
     if (!document || !document->settings().navigationAPIEnabled())
@@ -4172,7 +4187,7 @@ bool FrameLoader::dispatchNavigateEvent(const URL& newURL, FrameLoadType loadTyp
     if (navigationType == NavigationNavigationType::Traverse)
         return true;
 
-    return window->protectedNavigation()->dispatchPushReplaceReloadNavigateEvent(newURL, navigationType, isSameDocument);
+    return window->protectedNavigation()->dispatchPushReplaceReloadNavigateEvent(newURL, navigationType, isSameDocument, formState);
 }
 
 void FrameLoader::loadSameDocumentItem(HistoryItem& item)
@@ -4326,8 +4341,12 @@ void FrameLoader::loadItem(HistoryItem& item, HistoryItem* fromItem, FrameLoadTy
 
     if (frame().document() && frame().document()->settings().navigationAPIEnabled() && fromItem && SecurityOrigin::create(item.url())->isSameOriginAs(SecurityOrigin::create(fromItem->url()))) {
         if (RefPtr domWindow = frame().document()->domWindow()) {
-            if (!domWindow->protectedNavigation()->dispatchTraversalNavigateEvent(item))
-                return;
+            if (RefPtr navigation = domWindow->protectedNavigation(); navigation->frame()) {
+                navigation->dispatchTraversalNavigateEvent(item);
+                // In case the event detached the frame.
+                if (!navigation->frame())
+                    return;
+            }
         }
     }
 
@@ -4460,6 +4479,8 @@ void FrameLoader::didChangeTitle(DocumentLoader* loader)
     m_client->didChangeTitle(loader);
 
     if (loader == m_documentLoader) {
+        // Must update the entries in the back-forward list too.
+        m_frame->history().setCurrentItemTitle(loader->title());
         // This must go through the WebFrame because it has the right notion of the current b/f item.
         m_client->setTitle(loader->title(), loader->urlForHistory());
         m_client->setMainFrameDocumentReady(true); // update observers with new DOMDocument

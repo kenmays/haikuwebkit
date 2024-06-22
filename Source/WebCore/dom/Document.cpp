@@ -1325,11 +1325,6 @@ DOMImplementation& Document::implementation()
     return *m_implementation;
 }
 
-bool Document::hasManifest() const
-{
-    return documentElement() && documentElement()->hasTagName(htmlTag) && documentElement()->hasAttributeWithoutSynchronization(manifestAttr);
-}
-
 DocumentType* Document::doctype() const
 {
     for (Node* node = firstChild(); node; node = node->nextSibling()) {
@@ -2753,9 +2748,14 @@ auto Document::updateLayout(OptionSet<LayoutOptions> layoutOptions, const Elemen
 
         if (frameView && renderView()) {
             if (context && layoutOptions.contains(LayoutOptions::ContentVisibilityForceLayout)) {
-                if (context->renderer() && context->renderer()->style().hasSkippedContent() && !context->renderer()->everHadSkippedContentLayout())
-                    context->renderer()->setNeedsLayout();
-                else
+                if (context->renderer() && context->renderer()->style().hasSkippedContent()) {
+                    if (auto wasSkippedDuringLastLayout = context->renderer()->wasSkippedDuringLastLayoutDueToContentVisibility()) {
+                        if (*wasSkippedDuringLastLayout)
+                            context->renderer()->setNeedsLayout();
+                        else
+                            context = nullptr;
+                    }
+                } else
                     context = nullptr;
             }
             if (frameView->layoutContext().isLayoutPending() || renderView()->needsLayout()) {
@@ -3916,6 +3916,9 @@ void Document::enqueuePaintTimingEntryIfNeeded()
 
 ExceptionOr<void> Document::write(Document* entryDocument, SegmentedString&& text)
 {
+    if (!isHTMLDocument() || m_throwOnDynamicMarkupInsertionCount)
+        return Exception { ExceptionCode::InvalidStateError };
+
     if (m_activeParserWasAborted)
         return { };
 
@@ -3942,27 +3945,59 @@ ExceptionOr<void> Document::write(Document* entryDocument, SegmentedString&& tex
     return { };
 }
 
+ExceptionOr<void> Document::write(Document* entryDocument, FixedVector<std::variant<RefPtr<TrustedHTML>, String>>&& strings, ASCIILiteral lineFeed)
+{
+    auto isTrusted = true;
+    SegmentedString text;
+    for (auto& entry : strings) {
+        text.append(WTF::switchOn(WTFMove(entry),
+            [&isTrusted](const String& string) {
+                isTrusted = false;
+                return string;
+            },
+            [](const RefPtr<TrustedHTML>& html) {
+                return html->toString();
+            }
+        ));
+    }
+
+    if (isTrusted || !scriptExecutionContext()->settingsValues().trustedTypesEnabled) {
+        text.append(lineFeed);
+        return write(entryDocument, WTFMove(text));
+    }
+
+    String textString = text.toString();
+    auto stringValueHolder = trustedTypeCompliantString(TrustedType::TrustedHTML, *scriptExecutionContext(), textString, lineFeed.isEmpty() ? "Document write"_s : "Document writeln"_s);
+    if (stringValueHolder.hasException())
+        return stringValueHolder.releaseException();
+    SegmentedString trustedText(stringValueHolder.releaseReturnValue());
+    trustedText.append(lineFeed);
+    return write(entryDocument, WTFMove(trustedText));
+}
+
+ExceptionOr<void> Document::write(Document* entryDocument, FixedVector<std::variant<RefPtr<TrustedHTML>, String>>&& strings)
+{
+    return write(entryDocument, WTFMove(strings), ""_s);
+}
+
 ExceptionOr<void> Document::write(Document* entryDocument, FixedVector<String>&& strings)
 {
-    if (!isHTMLDocument() || m_throwOnDynamicMarkupInsertionCount)
-        return Exception { ExceptionCode::InvalidStateError };
-
     SegmentedString text;
     for (auto& string : strings)
         text.append(WTFMove(string));
-
     return write(entryDocument, WTFMove(text));
+}
+
+ExceptionOr<void> Document::writeln(Document* entryDocument, FixedVector<std::variant<RefPtr<TrustedHTML>, String>>&& strings)
+{
+    return write(entryDocument, WTFMove(strings), "\n"_s);
 }
 
 ExceptionOr<void> Document::writeln(Document* entryDocument, FixedVector<String>&& strings)
 {
-    if (!isHTMLDocument() || m_throwOnDynamicMarkupInsertionCount)
-        return Exception { ExceptionCode::InvalidStateError };
-
     SegmentedString text;
     for (auto& string : strings)
         text.append(WTFMove(string));
-
     text.append("\n"_s);
     return write(entryDocument, WTFMove(text));
 }
@@ -4238,6 +4273,15 @@ void Document::disableWebAssembly(const String& errorMessage)
         return;
 
     frame->checkedScript()->setWebAssemblyEnabled(false, errorMessage);
+}
+
+void Document::setRequiresTrustedTypes(bool required)
+{
+    RefPtr frame = this->frame();
+    if (!frame)
+        return;
+
+    frame->checkedScript()->setRequiresTrustedTypes(required);
 }
 
 IDBClient::IDBConnectionProxy* Document::idbConnectionProxy()
@@ -9177,8 +9221,15 @@ void Document::updateIntersectionObservations(const Vector<WeakPtr<IntersectionO
         return;
 
     bool needsLayout = frameView->layoutContext().isLayoutPending() || (renderView() && renderView()->needsLayout());
-    if (needsLayout || hasPendingStyleRecalc())
+    if (needsLayout || hasPendingStyleRecalc()) {
+        if (!intersectionObservers.isEmpty()) {
+            LOG_WITH_STREAM(IntersectionObserver, stream << "Document " << this << " updateIntersectionObservations - needsLayout " << needsLayout << " or has pending style recalc " << hasPendingStyleRecalc() << "; scheduling another update");
+            scheduleRenderingUpdate(RenderingUpdateStep::IntersectionObservations);
+        }
         return;
+    }
+
+    LOG_WITH_STREAM(IntersectionObserver, stream << "Document " << this << " updateIntersectionObservations - notifying observers");
 
     Vector<WeakPtr<IntersectionObserver>> intersectionObserversWithPendingNotifications;
 
@@ -10536,6 +10587,10 @@ bool Document::activeViewTransitionCapturedDocumentElement() const
 
 void Document::setActiveViewTransition(RefPtr<ViewTransition>&& viewTransition)
 {
+    std::optional<Style::PseudoClassChangeInvalidation> styleInvalidation;
+    if (documentElement())
+        styleInvalidation.emplace(*documentElement(), CSSSelector::PseudoClass::ActiveViewTransition, !!viewTransition);
+    clearRenderingIsSuppressedForViewTransition();
     m_activeViewTransition = WTFMove(viewTransition);
 }
 
@@ -10547,6 +10602,34 @@ bool Document::hasViewTransitionPseudoElementTree() const
 void Document::setHasViewTransitionPseudoElementTree(bool value)
 {
     m_hasViewTransitionPseudoElementTree = value;
+}
+
+bool Document::renderingIsSuppressedForViewTransition() const
+{
+    return m_renderingIsSuppressedForViewTransition;
+}
+
+void Document::setRenderingIsSuppressedForViewTransitionAfterUpdateRendering()
+{
+    m_enableRenderingIsSuppressedForViewTransitionAfterUpdateRendering = true;
+}
+
+void Document::clearRenderingIsSuppressedForViewTransition()
+{
+    m_enableRenderingIsSuppressedForViewTransitionAfterUpdateRendering = false;
+    if (std::exchange(m_renderingIsSuppressedForViewTransition, false)) {
+        if (CheckedPtr view = renderView())
+            view->compositor().setRenderingIsSuppressed(false);
+    }
+}
+
+void Document::flushDeferredRenderingIsSuppressedForViewTransitionChanges()
+{
+    if (std::exchange(m_enableRenderingIsSuppressedForViewTransitionAfterUpdateRendering, false)) {
+        m_renderingIsSuppressedForViewTransition = true;
+        if (CheckedPtr view = renderView())
+            view->compositor().setRenderingIsSuppressed(true);
+    }
 }
 
 RefPtr<ViewTransition> Document::startViewTransition(RefPtr<ViewTransitionUpdateCallback>&& updateCallback)
@@ -10566,8 +10649,13 @@ RefPtr<ViewTransition> Document::startViewTransition(RefPtr<ViewTransitionUpdate
 
 void Document::performPendingViewTransitions()
 {
-    if (!m_activeViewTransition)
+    if (!m_activeViewTransition) {
+        if (renderingIsSuppressedForViewTransition()) {
+            clearRenderingIsSuppressedForViewTransition();
+            DOCUMENT_RELEASE_LOG_ERROR(ViewTransitions, "Rendering suppressed enabled without active view transition");
+        }
         return;
+    }
     Ref activeViewTransition = *m_activeViewTransition;
     if (activeViewTransition->phase() == ViewTransitionPhase::PendingCapture)
         activeViewTransition->setupViewTransition();
@@ -10609,6 +10697,22 @@ Ref<CSSFontSelector> Document::protectedFontSelector() const
     if (!m_fontSelector)
         return const_cast<Document&>(*this).ensureFontSelector();
     return *m_fontSelector;
+}
+
+PermissionsPolicy Document::permissionsPolicy() const
+{
+    // We create PermissionsPolicy on demand instead of at Document creation time,
+    // because Document may not be set on Frame yet, and it would affect the computation
+    // of PermissionsPolicy.
+    if (!m_permissionsPolicy)
+        m_permissionsPolicy = makeUnique<PermissionsPolicy>(ownerElement(), securityOrigin().data());
+
+    return *m_permissionsPolicy;
+}
+
+void Document::securityOriginDidChange()
+{
+    m_permissionsPolicy = nullptr;
 }
 
 } // namespace WebCore

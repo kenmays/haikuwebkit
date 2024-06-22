@@ -33,6 +33,7 @@
 #include "RemoteRenderingBackend.h"
 #include "StreamConnectionWorkQueue.h"
 #include <WebCore/GraphicsContext.h>
+#include <wtf/StdLibExtras.h>
 
 #define MESSAGE_CHECK(assertion, message) do { \
     if (UNLIKELY(!(assertion))) { \
@@ -90,9 +91,9 @@ void RemoteImageBuffer::getPixelBuffer(WebCore::PixelBufferFormat destinationFor
     IntRect srcRect(srcPoint, srcSize);
     if (auto pixelBuffer = m_imageBuffer->getPixelBuffer(destinationFormat, srcRect)) {
         MESSAGE_CHECK(pixelBuffer->bytes().size() <= memory->size(), "Shmem for return of getPixelBuffer is too small"_s);
-        memcpy(memory->data(), pixelBuffer->bytes().data(), pixelBuffer->bytes().size());
+        memcpySpan(memory->mutableSpan().first(pixelBuffer->bytes().size()), pixelBuffer->bytes());
     } else
-        memset(memory->data(), 0, memory->size());
+        memsetSpan(memory->mutableSpan(), 0);
     completionHandler();
 }
 
@@ -120,6 +121,8 @@ void RemoteImageBuffer::getShareableBitmap(WebCore::PreserveResolution preserveR
         auto backendSize = m_imageBuffer->backendSize();
         auto logicalSize = m_imageBuffer->logicalSize();
         auto resultSize = preserveResolution == WebCore::PreserveResolution::Yes ? backendSize : m_imageBuffer->truncatedLogicalSize();
+        if (resultSize.isEmpty())
+            return std::nullopt;
         auto bitmap = WebCore::ShareableBitmap::create({ resultSize, m_imageBuffer->colorSpace() });
         if (!bitmap)
             return std::nullopt;

@@ -30,16 +30,14 @@
 
 #import "AppKitSPI.h"
 #import "WKSafeBrowsingWarning.h"
+#import "WKTextAnimationType.h"
 #import "WKTextFinderClient.h"
-#import "WKTextIndicatorStyleType.h"
 #import "WKWebViewConfigurationPrivate.h"
 #import <WebKit/WKUIDelegatePrivate.h>
 #import "WebBackForwardList.h"
 #import "WebFrameProxy.h"
 #import "WebPageProxy.h"
 #import "WebProcessProxy.h"
-#import "WebTextReplacementData.h"
-#import "WebUnifiedTextReplacementContextData.h"
 #import "WebViewImpl.h"
 #import "_WKFrameHandleInternal.h"
 #import "_WKHitTestResultInternal.h"
@@ -49,7 +47,6 @@
 #import <wtf/cocoa/RuntimeApplicationChecksCocoa.h>
 
 #if USE(APPLE_INTERNAL_SDK)
-#import <WebKitAdditions/UnifiedTextReplacementAdditions.h>
 #import <WebKitAdditions/WebMultiRepresentationHEICAttachmentAdditions.h>
 #endif
 
@@ -1235,10 +1232,10 @@ ALLOW_DEPRECATED_DECLARATIONS_END
 {
 }
 
-#if ENABLE(UNIFIED_TEXT_REPLACEMENT)
-- (BOOL)_web_wantsCompleteUnifiedTextReplacementBehavior
+#if ENABLE(WRITING_TOOLS)
+- (BOOL)_web_wantsWritingToolsInlineEditing
 {
-    return [self _wantsCompleteUnifiedTextReplacementBehavior];
+    return [self wantsWritingToolsInlineEditing];
 }
 #endif
 
@@ -1642,6 +1639,11 @@ ALLOW_DEPRECATED_DECLARATIONS_END
     _impl->gestureEventWasNotHandledByWebCoreFromViewOnly(event);
 }
 
+- (double)minimumMagnification
+{
+    return _page->minPageZoomFactor();
+}
+
 - (void)_disableFrameSizeUpdates
 {
     _impl->disableFrameSizeUpdates();
@@ -1755,6 +1757,16 @@ ALLOW_DEPRECATED_DECLARATIONS_END
 - (void)_simulateMouseMove:(NSEvent *)event
 {
     return _impl->mouseMoved(event);
+}
+
+- (void)_createFlagsChangedEventMonitorForTesting
+{
+    _impl->createFlagsChangedEventMonitor();
+}
+
+- (void)_removeFlagsChangedEventMonitorForTesting
+{
+    _impl->removeFlagsChangedEventMonitor();
 }
 
 - (void)_setFont:(NSFont *)font sender:(id)sender

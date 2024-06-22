@@ -712,7 +712,7 @@ void Options::notifyOptionsChanged()
     Options::useConcurrentGC() = false;
     Options::forceUnlinkedDFG() = false;
     Options::useWebAssemblySIMD() = false;
-    Options::useIPIntWrappers() = false;
+    Options::useInterpretedJSEntryWrappers() = false;
 #if !CPU(ARM_THUMB2)
     Options::useBBQJIT() = false;
 #endif
@@ -722,7 +722,7 @@ void Options::notifyOptionsChanged()
 #endif
 
 #if ENABLE(C_LOOP) || !CPU(ADDRESS64) || !(CPU(ARM64) || (CPU(X86_64) && !OS(WINDOWS)))
-    Options::useIPIntWrappers() = false;
+    Options::useInterpretedJSEntryWrappers() = false;
 #endif
 
 #if !CPU(ARM64)
@@ -746,6 +746,13 @@ void Options::notifyOptionsChanged()
             Options::useDFGJIT() = false;
             Options::useFTLJIT() = false;
         }
+
+        // Windows: Building with ENABLE_DFG_JIT and disabling at runtime
+        // Windows: Building with ENABLE_YARR_JIT and disabling at runtime
+#if OS(WINDOWS)
+        Options::useDFGJIT() = false;
+        Options::useRegExpJIT() = false;
+#endif
 
         if (Options::dumpDisassembly()
             || Options::asyncDisassembly()
@@ -809,10 +816,6 @@ void Options::notifyOptionsChanged()
 
         ASSERT((static_cast<int64_t>(Options::thresholdForOptimizeAfterLongWarmUp()) << Options::reoptimizationRetryCounterMax()) > 0);
         ASSERT((static_cast<int64_t>(Options::thresholdForOptimizeAfterLongWarmUp()) << Options::reoptimizationRetryCounterMax()) <= static_cast<int64_t>(std::numeric_limits<int32_t>::max()));
-
-#if CPU(ARM)
-        Options::useOMGJIT() = false;
-#endif
 
         if (!Options::useBBQJIT() && Options::useOMGJIT())
             Options::wasmLLIntTiersUpToBBQ() = false;
@@ -1401,7 +1404,7 @@ SUPPRESS_ASAN bool canUseJITCage()
 {
     if (JSC_FORCE_USE_JIT_CAGE)
         return true;
-    return JSC_JIT_CAGE_VERSION() && WTF::processHasEntitlement("com.apple.private.verified-jit"_s);
+    return JSC_JIT_CAGE_VERSION() && !ASAN_ENABLED && WTF::processHasEntitlement("com.apple.private.verified-jit"_s);
 }
 #else
 bool canUseJITCage() { return false; }
@@ -1410,11 +1413,7 @@ bool canUseJITCage() { return false; }
 bool canUseHandlerIC()
 {
 #if CPU(X86_64)
-#if OS(WINDOWS)
-    return false;
-#else
     return true;
-#endif
 #elif CPU(ARM64)
     return !isIOS();
 #elif CPU(RISCV64)

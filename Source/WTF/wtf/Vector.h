@@ -652,9 +652,13 @@ private:
     // FIXME: Add a redzone before the buffer to catch off by one accesses. We don't need a guard after, because the buffer is the last member variable.
     static constexpr size_t asanInlineBufferAlignment = std::alignment_of<T>::value >= 8 ? std::alignment_of<T>::value : 8;
     static constexpr size_t asanAdjustedInlineCapacity = ((sizeof(T) * inlineCapacity + 7) & ~7) / sizeof(T);
+    ALLOW_DEPRECATED_DECLARATIONS_BEGIN
     typename std::aligned_storage<sizeof(T), asanInlineBufferAlignment>::type m_inlineBuffer[asanAdjustedInlineCapacity];
+    ALLOW_DEPRECATED_DECLARATIONS_END
 #else
+    ALLOW_DEPRECATED_DECLARATIONS_BEGIN
     typename std::aligned_storage<sizeof(T), std::alignment_of<T>::value>::type m_inlineBuffer[inlineCapacity];
+    ALLOW_DEPRECATED_DECLARATIONS_END
 #endif
 };
 
@@ -727,15 +731,9 @@ public:
         }
     }
 
-    // Include this non-template conversion from std::span to guide implicit conversion from arrays.
-    Vector(std::span<const T> span)
-        : Base(span.size(), span.size())
-    {
-        asanSetInitialBufferSizeTo(span.size());
-
-        if (begin())
-            VectorCopier<std::is_trivial<T>::value, T>::uninitializedCopy(span.data(), span.data() + span.size(), begin());
-    }
+    template<typename U, size_t Extent>
+    Vector(std::array<U, Extent> array)
+        : Vector(std::span { array }) { }
 
     template<typename U, size_t Extent> Vector(std::span<U, Extent> span)
         : Base(span.size(), span.size())

@@ -50,12 +50,12 @@ MacroAssemblerCodeRef<JITThunkPtrTag> returnFromBaselineGenerator(VM&);
 
 MacroAssemblerCodeRef<JITThunkPtrTag> polymorphicThunk(VM&);
 MacroAssemblerCodeRef<JITThunkPtrTag> polymorphicThunkForClosure(VM&);
+MacroAssemblerCodeRef<JITThunkPtrTag> polymorphicTopTierThunk(VM&);
+MacroAssemblerCodeRef<JITThunkPtrTag> polymorphicTopTierThunkForClosure(VM&);
 
 MacroAssemblerCodeRef<JITThunkPtrTag> virtualThunkForRegularCall(VM&);
 MacroAssemblerCodeRef<JITThunkPtrTag> virtualThunkForTailCall(VM&);
 MacroAssemblerCodeRef<JITThunkPtrTag> virtualThunkForConstruct(VM&);
-
-MacroAssemblerCodeRef<JITThunkPtrTag> polymorphicRepatchThunk(VM&);
 
 MacroAssemblerCodeRef<JITThunkPtrTag> nativeCallGenerator(VM&);
 MacroAssemblerCodeRef<JITThunkPtrTag> nativeCallWithDebuggerHookGenerator(VM&);

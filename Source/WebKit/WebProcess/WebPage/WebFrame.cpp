@@ -121,12 +121,8 @@ static uint64_t generateListenerID()
     return uniqueListenerID++;
 }
 
-// FIXME: Remove receivedMainFrameIdentifierFromUIProcess in favor of a more correct way of sending frame tree deltas to each process. <rdar://116201135>
-void WebFrame::initWithCoreMainFrame(WebPage& page, Frame& coreFrame, bool receivedMainFrameIdentifierFromUIProcess)
+void WebFrame::initWithCoreMainFrame(WebPage& page, Frame& coreFrame)
 {
-    if (!receivedMainFrameIdentifierFromUIProcess)
-        page.send(Messages::WebPageProxy::DidCreateMainFrame(frameID()));
-
     m_coreFrame = coreFrame;
     m_coreFrame->tree().setSpecifiedName(nullAtom());
     if (auto* localFrame = dynamicDowncast<LocalFrame>(coreFrame))
@@ -1186,7 +1182,7 @@ RetainPtr<CFDataRef> WebFrame::webArchiveData(FrameFilterFunction callback, void
 
 RefPtr<WebImage> WebFrame::createSelectionSnapshot() const
 {
-    auto snapshot = snapshotSelection(*coreLocalFrame(), { { WebCore::SnapshotFlags::ForceBlackText, WebCore::SnapshotFlags::Shareable }, PixelFormat::BGRA8, DestinationColorSpace::SRGB() });
+    auto snapshot = snapshotSelection(*coreLocalFrame(), { { WebCore::SnapshotFlags::ForceBlackText, WebCore::SnapshotFlags::Shareable }, ImageBufferPixelFormat::BGRA8, DestinationColorSpace::SRGB() });
     if (!snapshot)
         return nullptr;
 

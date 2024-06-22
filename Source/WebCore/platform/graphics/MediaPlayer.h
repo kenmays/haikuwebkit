@@ -634,7 +634,6 @@ public:
     void onNewVideoFrameMetadata(VideoFrameMetadata&&, RetainPtr<CVPixelBufferRef>&&);
 #endif
 
-    bool requiresTextTrackRepresentation() const;
     void setTextTrackRepresentation(TextTrackRepresentation*);
     void syncTextTrackBounds();
     void tracksChanged();
@@ -769,6 +768,10 @@ public:
 
     PlatformVideoTarget videoTarget() const { return client().mediaPlayerVideoTarget(); }
     MediaPlayerClientIdentifier clientIdentifier() const { return client().mediaPlayerClientIdentifier(); }
+
+#if ENABLE(LINEAR_MEDIA_PLAYER)
+    bool supportsLinearMediaPlayer() const;
+#endif
 
 private:
     MediaPlayer(MediaPlayerClient&);

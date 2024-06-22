@@ -221,6 +221,8 @@ public:
     static Vector<ScrollAxis> convertScrollTimelineAxis(BuilderState&, const CSSValue&);
     static Vector<ViewTimelineInsets> convertViewTimelineInset(BuilderState&, const CSSValue&);
 
+    static Vector<AtomString> convertAnchorName(BuilderState&, const CSSValue&);
+
 private:
     friend class BuilderCustom;
 
@@ -261,6 +263,9 @@ inline Length BuilderConverter::convertLength(const BuilderState& builderState, 
 
     if (primitiveValue.isCalculatedPercentageWithLength())
         return Length(primitiveValue.cssCalcValue()->createCalculationValue(conversionData));
+
+    if (primitiveValue.isAnchor())
+        return Length(0, LengthType::Fixed);
 
     ASSERT_NOT_REACHED();
     return Length(0, LengthType::Fixed);
@@ -2122,6 +2127,23 @@ inline Vector<ViewTimelineInsets> BuilderConverter::convertViewTimelineInset(Bui
         if (auto* primitiveValue = dynamicDowncast<CSSPrimitiveValue>(item))
             return { convertLengthOrAuto(state, *primitiveValue), std::nullopt };
         return { };
+    });
+}
+
+inline Vector<AtomString> BuilderConverter::convertAnchorName(BuilderState&, const CSSValue& value)
+{
+    if (auto* primitiveValue = dynamicDowncast<CSSPrimitiveValue>(value)) {
+        if (value.valueID() == CSSValueNone)
+            return { };
+        return { AtomString { primitiveValue->stringValue() } };
+    }
+
+    auto* list = dynamicDowncast<CSSValueList>(value);
+    if (!list)
+        return { };
+
+    return WTF::map(*list, [&](auto& item) {
+        return AtomString { downcast<CSSPrimitiveValue>(item).stringValue() };
     });
 }
 

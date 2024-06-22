@@ -268,10 +268,12 @@ ExceptionOr<std::optional<RenderingContext>> HTMLCanvasElement::getContext(JSC::
     if (is2dType(contextId)) {
         Ref vm = state.vm();
         auto scope = DECLARE_THROW_SCOPE(vm);
-        auto settings = convert<IDLDictionary<CanvasRenderingContext2DSettings>>(state, arguments.isEmpty() ? JSC::jsUndefined() : (arguments[0].isObject() ? arguments[0].get() : JSC::jsNull()));
-        RETURN_IF_EXCEPTION(scope, Exception { ExceptionCode::ExistingExceptionError });
 
-        RefPtr context = createContext2d(contextId, WTFMove(settings));
+        auto settings = convert<IDLDictionary<CanvasRenderingContext2DSettings>>(state, arguments.isEmpty() ? JSC::jsUndefined() : (arguments[0].isObject() ? arguments[0].get() : JSC::jsNull()));
+        if (UNLIKELY(settings.hasException(scope)))
+            return Exception { ExceptionCode::ExistingExceptionError };
+
+        RefPtr context = createContext2d(contextId, settings.releaseReturnValue());
         if (!context)
             return std::optional<RenderingContext> { std::nullopt };
         return std::optional<RenderingContext> { WTFMove(context) };
@@ -280,10 +282,12 @@ ExceptionOr<std::optional<RenderingContext>> HTMLCanvasElement::getContext(JSC::
     if (isBitmapRendererType(contextId)) {
         Ref vm = state.vm();
         auto scope = DECLARE_THROW_SCOPE(vm);
-        auto settings = convert<IDLDictionary<ImageBitmapRenderingContextSettings>>(state, arguments.isEmpty() ? JSC::jsUndefined() : (arguments[0].isObject() ? arguments[0].get() : JSC::jsNull()));
-        RETURN_IF_EXCEPTION(scope, Exception { ExceptionCode::ExistingExceptionError });
 
-        RefPtr context = createContextBitmapRenderer(contextId, WTFMove(settings));
+        auto settings = convert<IDLDictionary<ImageBitmapRenderingContextSettings>>(state, arguments.isEmpty() ? JSC::jsUndefined() : (arguments[0].isObject() ? arguments[0].get() : JSC::jsNull()));
+        if (UNLIKELY(settings.hasException(scope)))
+            return Exception { ExceptionCode::ExistingExceptionError };
+
+        RefPtr context = createContextBitmapRenderer(contextId, settings.releaseReturnValue());
         if (!context)
             return std::optional<RenderingContext> { std::nullopt };
         return std::optional<RenderingContext> { WTFMove(context) };
@@ -293,10 +297,12 @@ ExceptionOr<std::optional<RenderingContext>> HTMLCanvasElement::getContext(JSC::
     if (isWebGLType(contextId)) {
         Ref vm = state.vm();
         auto scope = DECLARE_THROW_SCOPE(vm);
-        auto attributes = convert<IDLDictionary<WebGLContextAttributes>>(state, arguments.isEmpty() ? JSC::jsUndefined() : (arguments[0].isObject() ? arguments[0].get() : JSC::jsNull()));
-        RETURN_IF_EXCEPTION(scope, Exception { ExceptionCode::ExistingExceptionError });
 
-        RefPtr context = createContextWebGL(toWebGLVersion(contextId), WTFMove(attributes));
+        auto attributes = convert<IDLDictionary<WebGLContextAttributes>>(state, arguments.isEmpty() ? JSC::jsUndefined() : (arguments[0].isObject() ? arguments[0].get() : JSC::jsNull()));
+        if (UNLIKELY(attributes.hasException(scope)))
+            return Exception { ExceptionCode::ExistingExceptionError };
+
+        RefPtr context = createContextWebGL(toWebGLVersion(contextId), attributes.releaseReturnValue());
         if (!context)
             return std::optional<RenderingContext> { std::nullopt };
 
@@ -545,48 +551,27 @@ GPUCanvasContext* HTMLCanvasElement::getContextWebGPU(const String& type, GPU* g
     return static_cast<GPUCanvasContext*>(m_context.get());
 }
 
-bool HTMLCanvasElement::shouldNotifyRendererOnDidDraw() const
-{
-    if (!renderBox()->hasAcceleratedCompositing())
-        return false;
-
-    if (isGPUBased())
-        return true;
-
-#if USE(SKIA) && USE(NICOSIA)
-    if (m_context && m_context->isAccelerated())
-        return true;
-#endif
-
-    return false;
-}
-
 void HTMLCanvasElement::didDraw(const std::optional<FloatRect>& rect, ShouldApplyPostProcessingToDirtyRect shouldApplyPostProcessingToDirtyRect)
 {
     clearCopiedImage();
-    auto adjustedRect = rect;
     if (CheckedPtr renderer = renderBox()) {
-        if (shouldNotifyRendererOnDidDraw())
+        if (usesContentsAsLayerContents())
             renderer->contentChanged(CanvasPixelsChanged);
-        else if (adjustedRect) {
+        else if (rect) {
             FloatRect destRect;
             if (CheckedPtr renderReplaced = dynamicDowncast<RenderReplaced>(*renderer))
                 destRect = renderReplaced->replacedContentRect();
             else
                 destRect = renderer->contentBoxRect();
 
-            // Inflate dirty rect to cover antialiasing on image buffers.
-            if (drawingContext() && drawingContext()->shouldAntialias())
-                adjustedRect->inflate(1);
-
-            FloatRect r = mapRect(*adjustedRect, FloatRect { { }, size() }, destRect);
+            FloatRect r = mapRect(*rect, FloatRect { { }, size() }, destRect);
             r.intersect(destRect);
 
             if (!r.isEmpty())
                 renderer->repaintRectangle(enclosingIntRect(r));
         }
     }
-    CanvasBase::didDraw(adjustedRect, shouldApplyPostProcessingToDirtyRect);
+    CanvasBase::didDraw(rect, shouldApplyPostProcessingToDirtyRect);
 }
 
 void HTMLCanvasElement::reset()
@@ -634,57 +619,37 @@ void HTMLCanvasElement::reset()
     notifyObserversCanvasResized();
 }
 
-bool HTMLCanvasElement::paintsIntoCanvasBuffer() const
+bool HTMLCanvasElement::usesContentsAsLayerContents() const
 {
-    ASSERT(m_context);
-#if USE(IOSURFACE_CANVAS_BACKING_STORE) || (USE(SKIA) && !USE(NICOSIA))
-    if (m_context->is2d() || m_context->isBitmapRenderer())
-        return true;
-#endif
-
-    if (!m_context->isAccelerated())
-        return true;
-
-    if (renderBox() && renderBox()->hasAcceleratedCompositing())
+    auto* renderBox = this->renderBox();
+    if (!renderBox)
         return false;
-
-    return true;
+    if (!m_context)
+        return false;
+    return renderBox->hasAcceleratedCompositing() && m_context->delegatesDisplay();
 }
-
-
 
 void HTMLCanvasElement::paint(GraphicsContext& context, const LayoutRect& r)
 {
-    if (m_context)
-        m_context->clearAccumulatedDirtyRect();
+    if (!m_context)
+        return;
+    m_context->clearAccumulatedDirtyRect();
 
     if (!context.paintingDisabled()) {
-        bool shouldPaint = true;
-
-        if (m_context) {
-            shouldPaint = paintsIntoCanvasBuffer() || document().printing() || m_isSnapshotting;
-            if (shouldPaint) {
-                if (m_context->compositingResultsNeedUpdating())
-                    m_context->prepareForDisplay();
-                m_context->drawBufferToCanvas(CanvasRenderingContext::SurfaceBuffer::DisplayBuffer);
-            }
-        }
-
-        if (shouldPaint) {
-            if (hasCreatedImageBuffer()) {
-                if (RefPtr imageBuffer = buffer())
-                    context.drawImageBuffer(*imageBuffer, snappedIntRect(r), { context.compositeOperation() });
+        if (!usesContentsAsLayerContents() || document().printing() || m_isSnapshotting) {
+            if (m_context->compositingResultsNeedUpdating())
+                m_context->prepareForDisplay();
+            const bool skipTransparentBlackDraw = context.compositeMode() == CompositeMode { CompositeOperator::SourceOver, BlendMode::Normal };
+            if (!skipTransparentBlackDraw || !m_context->isSurfaceBufferTransparentBlack(CanvasRenderingContext::SurfaceBuffer::DisplayBuffer)) {
+                RefPtr buffer = m_context->surfaceBufferToImageBuffer(CanvasRenderingContext::SurfaceBuffer::DisplayBuffer);
+                if (buffer)
+                    context.drawImageBuffer(*buffer, snappedIntRect(r), { context.compositeOperation() });
             }
         }
     }
 
-    if (UNLIKELY(m_context && m_context->hasActiveInspectorCanvasCallTracer()))
+    if (UNLIKELY(m_context->hasActiveInspectorCanvasCallTracer()))
         InspectorInstrumentation::didFinishRecordingCanvasFrame(*m_context);
-}
-
-bool HTMLCanvasElement::isGPUBased() const
-{
-    return m_context && m_context->isGPUBased();
 }
 
 void HTMLCanvasElement::setSurfaceSize(const IntSize& size)
@@ -796,11 +761,12 @@ ExceptionOr<Ref<OffscreenCanvas>> HTMLCanvasElement::transferControlToOffscreen(
     if (m_context)
         return Exception { ExceptionCode::InvalidStateError };
 
-    m_context = makeUniqueWithoutRefCountedCheck<PlaceholderRenderingContext>(*this);
-    if (m_context->isAccelerated())
+    std::unique_ptr placeholderContext = PlaceholderRenderingContext::create(*this);
+    Ref offscreen = OffscreenCanvas::create(document(), *placeholderContext);
+    m_context = WTFMove(placeholderContext);
+    if (m_context->delegatesDisplay())
         invalidateStyleAndLayerComposition();
-
-    return OffscreenCanvas::create(document(), *this);
+    return offscreen;
 }
 #endif
 

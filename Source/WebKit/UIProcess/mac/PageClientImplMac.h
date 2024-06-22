@@ -235,7 +235,7 @@ private:
     void willBeginViewGesture() final;
     void didEndViewGesture() final;
 
-    void requestDOMPasteAccess(WebCore::DOMPasteAccessCategory, const WebCore::IntRect&, const String&, CompletionHandler<void(WebCore::DOMPasteAccessResponse)>&&) final;
+    void requestDOMPasteAccess(WebCore::DOMPasteAccessCategory, WebCore::DOMPasteRequiresInteraction, const WebCore::IntRect&, const String&, CompletionHandler<void(WebCore::DOMPasteAccessResponse)>&&) final;
 
     void makeViewBlank(bool) final;
 
@@ -308,9 +308,9 @@ private:
     void handleContextMenuTranslation(const WebCore::TranslationContextMenuInfo&) override;
 #endif
 
-#if ENABLE(UNIFIED_TEXT_REPLACEMENT) && ENABLE(CONTEXT_MENUS)
-    bool canHandleSwapCharacters() const override;
-    void handleContextMenuSwapCharacters(WebCore::IntRect selectionBoundsInRootView) override;
+#if ENABLE(WRITING_TOOLS) && ENABLE(CONTEXT_MENUS)
+    bool canHandleContextMenuWritingTools() const override;
+    void handleContextMenuWritingTools(WebCore::IntRect selectionBoundsInRootView) override;
 #endif
 
 #if ENABLE(DATA_DETECTION)

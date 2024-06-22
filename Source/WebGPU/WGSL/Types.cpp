@@ -326,7 +326,11 @@ unsigned Type::size() const
             CheckedUint32 size = 1;
             if (auto* constantSize = std::get_if<unsigned>(&array.size))
                 size = *constantSize;
-            size *= WTF::roundUpToMultipleOf(array.element->alignment(), array.element->size());
+            auto elementSize = array.element->size();
+            auto stride = WTF::roundUpToMultipleOf(array.element->alignment(), elementSize);
+            if (stride < elementSize)
+                return std::numeric_limits<unsigned>::max();
+            size *= stride;
             if (size.hasOverflowed())
                 return std::numeric_limits<unsigned>::max();
             return size.value();
@@ -334,8 +338,11 @@ unsigned Type::size() const
         [&](const Struct& structure) -> unsigned {
             return structure.structure.size();
         },
-        [&](const PrimitiveStruct&) -> unsigned {
-            RELEASE_ASSERT_NOT_REACHED();
+        [&](const PrimitiveStruct& structure) -> unsigned {
+            unsigned size = 0;
+            for (auto* type : structure.values)
+                size += type->size();
+            return size;
         },
         [&](const Function&) -> unsigned {
             RELEASE_ASSERT_NOT_REACHED();

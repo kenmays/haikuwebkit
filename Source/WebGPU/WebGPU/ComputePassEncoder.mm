@@ -179,7 +179,11 @@ void ComputePassEncoder::executePreDispatchCommands(const Buffer* indirectBuffer
             return;
         }
         auto& group = *kvp.value.get();
-        if (NSString* error = errorValidatingBindGroup(group, m_pipeline->minimumBufferSizes(bindGroupIndex))) {
+        group.rebindSamplersIfNeeded();
+        const Vector<uint32_t>* dynamicOffsets = nullptr;
+        if (auto it = m_bindGroupDynamicOffsets.find(bindGroupIndex); it != m_bindGroupDynamicOffsets.end())
+            dynamicOffsets = &it->value;
+        if (NSString* error = errorValidatingBindGroup(group, m_pipeline->minimumBufferSizes(bindGroupIndex), dynamicOffsets)) {
             makeInvalid(error);
             return;
         }
@@ -226,8 +230,7 @@ void ComputePassEncoder::executePreDispatchCommands(const Buffer* indirectBuffer
         if (pcomputeOffsets && pcomputeOffsets->size()) {
             auto& computeOffsets = *pcomputeOffsets;
             auto startIndex = pipelineLayout.computeOffsetForBindGroup(bindGroupIndex);
-            RELEASE_ASSERT(computeOffsets.size() <= m_computeDynamicOffsets.size() + startIndex);
-            memcpy(&m_computeDynamicOffsets[startIndex], &computeOffsets[0], sizeof(computeOffsets[0]) * computeOffsets.size());
+            memcpySpan(m_computeDynamicOffsets.mutableSpan().subspan(startIndex, computeOffsets.size()), computeOffsets.span());
         }
     }
 
@@ -446,7 +449,7 @@ void ComputePassEncoder::setBindGroup(uint32_t groupIndex, const BindGroup& grou
     }
 
     m_bindGroupResources.set(groupIndex, resourceList);
-    m_bindGroups.set(groupIndex, group);
+    m_bindGroups.set(groupIndex, &group);
 }
 
 void ComputePassEncoder::setPipeline(const ComputePipeline& pipeline)

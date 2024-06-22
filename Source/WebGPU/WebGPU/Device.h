@@ -141,8 +141,11 @@ public:
     id<MTLRenderPipelineState> indexedIndirectBufferClampPipeline(NSUInteger rasterSampleCount);
     id<MTLRenderPipelineState> indirectBufferClampPipeline(NSUInteger rasterSampleCount);
     id<MTLRenderPipelineState> icbCommandClampPipeline(MTLIndexType, NSUInteger rasterSampleCount);
+    id<MTLFunction> icbCommandClampFunction(MTLIndexType);
     id<MTLRenderPipelineState> copyIndexIndirectArgsPipeline(NSUInteger rasterSampleCount);
     id<MTLBuffer> safeCreateBuffer(NSUInteger length, MTLStorageMode, MTLCPUCacheMode = MTLCPUCacheModeDefaultCache, MTLHazardTrackingMode = MTLHazardTrackingModeDefault) const;
+    void loseTheDevice(WGPUDeviceLostReason);
+    int bufferIndexForICBContainer() const;
 
 private:
     Device(id<MTLDevice>, id<MTLCommandQueue> defaultQueue, HardwareCapabilities&&, Adapter&);
@@ -159,7 +162,6 @@ private:
     NSString* addPipelineLayouts(Vector<Vector<WGPUBindGroupLayoutEntry>>&, const std::optional<WGSL::PipelineLayout>&);
     Ref<PipelineLayout> generatePipelineLayout(const Vector<Vector<WGPUBindGroupLayoutEntry>> &bindGroupEntries);
 
-    void loseTheDevice(WGPUDeviceLostReason);
     void captureFrameIfNeeded() const;
     struct ExternalTextureData {
         id<MTLTexture> texture0 { nil };

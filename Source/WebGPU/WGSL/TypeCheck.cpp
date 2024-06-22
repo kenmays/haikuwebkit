@@ -79,11 +79,13 @@ enum class Behavior : uint8_t {
 };
 using Behaviors = OptionSet<Behavior>;
 
-enum class BreakTarget : uint8_t {
-    Switch,
-    Loop,
-    Continuing
-};
+using BreakTarget = std::variant<
+    AST::SwitchStatement*,
+    AST::LoopStatement*,
+    AST::ForStatement*,
+    AST::WhileStatement*,
+    AST::Continuing*
+>;
 
 static ASCIILiteral bindingKindToString(Binding::Kind kind)
 {
@@ -1247,6 +1249,7 @@ void TypeChecker::visit(AST::CallExpression& call)
     if (targetBinding) {
         target.m_inferredType = targetBinding->type;
         if (targetBinding->kind == Binding::Type) {
+            call.m_isConstructor = true;
             if (auto* structType = std::get_if<Types::Struct>(targetBinding->type)) {
                 if (!targetBinding->type->isConstructible()) {
                     typeError(call.span(), "struct is not constructible"_s);
@@ -1361,6 +1364,10 @@ void TypeChecker::visit(AST::CallExpression& call)
     if (isNamedType || isParameterizedType) {
         auto* result = chooseOverload("initializer"_s, call.span(), &call, targetName, call.arguments(), typeArguments);
         if (result) {
+            target.m_inferredType = result;
+            if (isBottom(result))
+                return;
+
             // FIXME: this will go away once we track used intrinsics properly
             if (targetName == "workgroupUniformLoad"_s)
                 m_shaderModule.setUsesWorkgroupUniformLoad();
@@ -1384,7 +1391,19 @@ void TypeChecker::visit(AST::CallExpression& call)
                 m_shaderModule.setUsesDot4U8Packed();
             else if (targetName == "extractBits"_s)
                 m_shaderModule.setUsesExtractBits();
-            target.m_inferredType = result;
+            else if (targetName == "textureGather"_s) {
+                auto& component = call.arguments()[0];
+                if (satisfies(component.inferredType(), Constraints::ConcreteInteger)) {
+                    auto& constant = component.constantValue();
+                    if (!constant)
+                        typeError(InferBottom::No, component.span(), "the component argument must be a const-expression"_s);
+                    else {
+                        auto componentValue = constant->integerValue();
+                        if (componentValue < 0 || componentValue > 3)
+                            typeError(InferBottom::No, component.span(), "the component argument must be at least 0 and at most 3. component is "_s, String::number(componentValue));
+                    }
+                }
+            }
             return;
         }
 
@@ -1493,6 +1512,7 @@ void TypeChecker::visit(AST::CallExpression& call)
             argument.m_inferredType = elementType;
     }
 
+    call.m_isConstructor = true;
     auto* result = m_types.arrayType(elementType, { elementCount });
     inferred(result);
 
@@ -1508,9 +1528,13 @@ void TypeChecker::visit(AST::CallExpression& call)
             arguments[i] = *value;
     }
     if (isConstant) {
-        if (argumentCount)
+        if (argumentCount) {
+            // https://www.w3.org/TR/WGSL/#limits
+            constexpr unsigned maximumConstantArraySize = 2047;
+            if (UNLIKELY(argumentCount > maximumConstantArraySize))
+                typeError(InferBottom::No, call.span(), "constant array cannot have more than "_s, String::number(maximumConstantArraySize), " elements"_s);
             setConstantValue(call, result, ConstantArray(WTFMove(arguments)));
-        else
+        } else
             setConstantValue(call, result, zeroValue(result));
     }
 }
@@ -2006,29 +2030,54 @@ Behaviors TypeChecker::analyze(AST::Statement& statement)
     case AST::NodeKind::BreakStatement:
         if (m_breakTargetStack.isEmpty())
             typeError(InferBottom::No, statement.span(), "break statement must be in a loop or switch case"_s);
-        else if (m_breakTargetStack.last() == BreakTarget::Continuing)
+        else if (std::holds_alternative<AST::Continuing*>(m_breakTargetStack.last()))
             typeError(InferBottom::No, statement.span(), "`break` must not be used to exit from a continuing block. Use `break-if` instead"_s);
         return Behavior::Break;
     case AST::NodeKind::ReturnStatement:
-        if (m_breakTargetStack.contains(BreakTarget::Continuing))
+        if (m_breakTargetStack.containsIf([&](auto& it) { return std::holds_alternative<AST::Continuing*>(it); }))
             typeError(InferBottom::No, statement.span(), "continuing blocks must not contain a return statement"_s);
         return Behavior::Return;
-    case AST::NodeKind::ContinueStatement:
-        if (m_breakTargetStack.isEmpty())
-            typeError(InferBottom::No, statement.span(), "break statement must be in a loop"_s);
-        else {
-            for (int i = m_breakTargetStack.size() - 1; i >= 0; --i) {
-                auto target = m_breakTargetStack[i];
-                if (target == BreakTarget::Continuing)
-                    typeError(InferBottom::No, statement.span(), "continuing blocks must not contain a continue statement"_s);
-                else if (target == BreakTarget::Switch)
-                    continue;
-                else // BreakTarget::Loop
-                    break;
+    case AST::NodeKind::ContinueStatement: {
+        bool hasLoopTarget = false;
+        for (int i = m_breakTargetStack.size() - 1; i >= 0; --i) {
+            auto& target = m_breakTargetStack[i];
+            if (std::holds_alternative<AST::SwitchStatement*>(target))
+                continue;
 
+            hasLoopTarget = true;
+
+            if (std::holds_alternative<AST::Continuing*>(target)) {
+                typeError(InferBottom::No, statement.span(), "continuing blocks must not contain a continue statement"_s);
+                break;
             }
+
+            if (auto** loop = std::get_if<AST::LoopStatement*>(&target)) {
+                if ((*loop)->continuing().has_value()) {
+                    (*loop)->setContainsSwitch();
+                    auto& continueStatement = downcast<AST::ContinueStatement>(statement);
+                    continueStatement.setIsFromSwitchToContinuing();
+                    for (size_t j = i + 1; j < m_breakTargetStack.size(); ++j) {
+                        auto* switchStatement = std::get<AST::SwitchStatement*>(m_breakTargetStack[j]);
+                        if (j == static_cast<size_t>(i + 1))
+                            switchStatement->setIsInsideLoop();
+                        else
+                            switchStatement->setIsNestedInsideLoop();
+                    }
+                }
+                break;
+            }
+
+            ASSERT(std::holds_alternative<AST::ForStatement*>(target) || std::holds_alternative<AST::WhileStatement*>(target));
+            break;
+
+        }
+
+        if (!hasLoopTarget) {
+            typeError(InferBottom::No, statement.span(), "continue statement must be in a loop"_s);
+            return Behavior::Next;
         }
         return Behavior::Continue;
+    }
     case AST::NodeKind::CompoundStatement:
         return analyze(uncheckedDowncast<AST::CompoundStatement>(statement));
     case AST::NodeKind::ForStatement:
@@ -2057,7 +2106,7 @@ Behaviors TypeChecker::analyze(AST::ForStatement& statement)
     if (statement.maybeTest())
         behaviors.add({ Behavior::Next, Behavior::Break });
 
-    m_breakTargetStack.append(BreakTarget::Loop);
+    m_breakTargetStack.append(&statement);
     behaviors.add(analyze(statement.body()));
     m_breakTargetStack.removeLast();
 
@@ -2085,10 +2134,10 @@ Behaviors TypeChecker::analyze(AST::IfStatement& statement)
 
 Behaviors TypeChecker::analyze(AST::LoopStatement& statement)
 {
-    m_breakTargetStack.append(BreakTarget::Loop);
+    m_breakTargetStack.append(&statement);
     auto behaviors = analyzeStatements(statement.body());
     if (auto& continuing = statement.continuing()) {
-        m_breakTargetStack.append(BreakTarget::Continuing);
+        m_breakTargetStack.append(&continuing.value());
         behaviors.add(analyzeStatements(continuing->body));
         m_breakTargetStack.removeLast();
         if (auto* breakIf = continuing->breakIf)
@@ -2109,7 +2158,7 @@ Behaviors TypeChecker::analyze(AST::LoopStatement& statement)
 
 Behaviors TypeChecker::analyze(AST::SwitchStatement& statement)
 {
-    m_breakTargetStack.append(BreakTarget::Switch);
+    m_breakTargetStack.append(&statement);
     auto behaviors = analyze(statement.defaultClause().body);
     for (auto& clause : statement.clauses())
         behaviors.add(analyze(clause.body));
@@ -2125,7 +2174,7 @@ Behaviors TypeChecker::analyze(AST::SwitchStatement& statement)
 Behaviors TypeChecker::analyze(AST::WhileStatement& statement)
 {
     auto behaviors = Behaviors({ Behavior::Next, Behavior::Break });
-    m_breakTargetStack.append(BreakTarget::Loop);
+    m_breakTargetStack.append(&statement);
     behaviors.add(analyze(statement.body()));
     m_breakTargetStack.removeLast();
     behaviors.remove({ Behavior::Break, Behavior::Continue });

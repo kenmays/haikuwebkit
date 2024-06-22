@@ -50,7 +50,7 @@ inline std::span<const UChar> span(const UChar& character)
 
 inline std::span<const LChar> span8(const char* string)
 {
-    return { reinterpret_cast<const LChar*>(string), string ? strlen(string) : 0 };
+    return { byteCast<LChar>(string), string ? strlen(string) : 0 };
 }
 
 inline std::span<const char> span(const char* string)
@@ -197,8 +197,8 @@ ALWAYS_INLINE bool equal(const LChar* aLChar, std::span<const LChar> bLChar)
     ASSERT(bLChar.size() <= std::numeric_limits<unsigned>::max());
     unsigned length = bLChar.size();
 
-    const char* a = reinterpret_cast<const char*>(aLChar);
-    const char* b = reinterpret_cast<const char*>(bLChar.data());
+    const char* a = byteCast<char>(aLChar);
+    const char* b = byteCast<char>(bLChar.data());
 
     unsigned wordLength = length >> 2;
     for (unsigned i = 0; i != wordLength; ++i) {
@@ -211,8 +211,8 @@ ALWAYS_INLINE bool equal(const LChar* aLChar, std::span<const LChar> bLChar)
     length &= 3;
 
     if (length) {
-        const LChar* aRemainder = reinterpret_cast<const LChar*>(a);
-        const LChar* bRemainder = reinterpret_cast<const LChar*>(b);
+        const LChar* aRemainder = byteCast<LChar>(a);
+        const LChar* bRemainder = byteCast<LChar>(b);
 
         for (unsigned i = 0; i <  length; ++i) {
             if (aRemainder[i] != bRemainder[i])
@@ -591,36 +591,22 @@ ALWAYS_INLINE const uint8_t* find8(const uint8_t* pointer, uint8_t character, si
 template<typename UnsignedType>
 ALWAYS_INLINE const UnsignedType* findImpl(const UnsignedType* pointer, UnsignedType character, size_t length)
 {
-    // We take `size_t` length instead of `unsigned` because it is aligned to memchr.
-    constexpr size_t thresholdLength = 32;
-    const auto* cursor = pointer;
-    const auto* end = pointer + length;
+    auto charactersVector = SIMD::splat<UnsignedType>(character);
+    auto vectorMatch = [&](auto value) ALWAYS_INLINE_LAMBDA {
+        auto mask = SIMD::equal(value, charactersVector);
+        return SIMD::findFirstNonZeroIndex(mask);
+    };
 
-    if (length >= thresholdLength) {
-        constexpr size_t stride = 16 / sizeof(UnsignedType);
-        static_assert(stride <= thresholdLength);
-        auto charactersVector = SIMD::splat(character);
-        for (; cursor + (stride - 1) < end; cursor += stride) {
-            auto value = SIMD::load(cursor);
-            auto mask = SIMD::equal(value, charactersVector);
-            if (auto index = SIMD::findFirstNonZeroIndex(mask))
-                return cursor + index.value();
-        }
+    auto scalarMatch = [&](auto current) ALWAYS_INLINE_LAMBDA {
+        return current == character;
+    };
 
-        if (cursor < end) {
-            auto value = SIMD::load(end - stride);
-            auto mask = SIMD::equal(value, charactersVector);
-            if (auto index = SIMD::findFirstNonZeroIndex(mask))
-                return end - stride + index.value();
-        }
+    constexpr size_t threshold = 32;
+    auto* end = pointer + length;
+    auto* cursor = SIMD::find<UnsignedType, threshold>(std::span { pointer, end }, vectorMatch, scalarMatch);
+    if (cursor == end)
         return nullptr;
-    }
-
-    for (; cursor < end; ++cursor) {
-        if (*cursor == character)
-            return cursor;
-    }
-    return nullptr;
+    return cursor;
 }
 
 ALWAYS_INLINE const uint16_t* find16(const uint16_t* pointer, uint16_t character, size_t length)
@@ -839,7 +825,7 @@ template<typename CharacterType> inline bool equalLettersIgnoringASCIICase(std::
 
 template<typename CharacterType> inline bool equalLettersIgnoringASCIICase(std::span<const CharacterType> characters, std::span<const char> lowercaseLetters)
 {
-    return equalLettersIgnoringASCIICase(characters, { reinterpret_cast<const LChar*>(lowercaseLetters.data()), lowercaseLetters.size() });
+    return equalLettersIgnoringASCIICase(characters, byteCast<LChar>(lowercaseLetters));
 }
 
 template<typename CharacterType> inline bool equalLettersIgnoringASCIICase(std::span<const CharacterType> characters, ASCIILiteral lowercaseLetters)
@@ -1144,17 +1130,17 @@ ALWAYS_INLINE bool charactersContain(std::span<const CharacterType> span)
     size_t length = span.size();
 
 #if CPU(ARM64) || CPU(X86_64)
-    constexpr size_t stride = 16 / sizeof(CharacterType);
+    constexpr size_t stride = SIMD::stride<CharacterType>;
     using UnsignedType = std::make_unsigned_t<CharacterType>;
     using BulkType = decltype(SIMD::load(static_cast<const UnsignedType*>(nullptr)));
     if (length >= stride) {
         size_t index = 0;
         BulkType accumulated { };
         for (; index + (stride - 1) < length; index += stride)
-            accumulated = SIMD::merge(accumulated, SIMD::equal<characters...>(SIMD::load(bitwise_cast<const UnsignedType*>(data + index))));
+            accumulated = SIMD::bitOr(accumulated, SIMD::equal<characters...>(SIMD::load(bitwise_cast<const UnsignedType*>(data + index))));
 
         if (index < length)
-            accumulated = SIMD::merge(accumulated, SIMD::equal<characters...>(SIMD::load(bitwise_cast<const UnsignedType*>(data + length - stride))));
+            accumulated = SIMD::bitOr(accumulated, SIMD::equal<characters...>(SIMD::load(bitwise_cast<const UnsignedType*>(data + length - stride))));
 
         return SIMD::isNonZero(accumulated);
     }

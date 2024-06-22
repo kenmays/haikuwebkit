@@ -533,6 +533,7 @@ bool MediaPlayerPrivateRemote::seeking() const
 
 void MediaPlayerPrivateRemote::rateChanged(double rate, MediaTimeUpdateData&& timeData)
 {
+    INFO_LOG(LOGIDENTIFIER, "rate:", rate, " currentTime:", timeData.currentTime, " timeIsProgressing:", timeData.timeIsProgressing);
     m_rate = rate;
     m_currentTimeEstimator.setRate(rate);
     m_currentTimeEstimator.setTime(timeData);
@@ -1463,7 +1464,7 @@ void MediaPlayerPrivateRemote::waitingForKeyChanged(bool waitingForKey)
 
 void MediaPlayerPrivateRemote::initializationDataEncountered(const String& initDataType, std::span<const uint8_t> initData)
 {
-    auto initDataBuffer = ArrayBuffer::create(initData.data(), initData.size());
+    auto initDataBuffer = ArrayBuffer::create(initData);
     if (auto player = m_player.get())
         player->initializationDataEncountered(initDataType, WTFMove(initDataBuffer));
 }
@@ -1480,15 +1481,6 @@ void MediaPlayerPrivateRemote::setShouldContinueAfterKeyNeeded(bool should)
     connection().send(Messages::RemoteMediaPlayerProxy::SetShouldContinueAfterKeyNeeded(should), m_id);
 }
 #endif
-
-bool MediaPlayerPrivateRemote::requiresTextTrackRepresentation() const
-{
-#if PLATFORM(COCOA)
-    return m_videoLayerManager->requiresTextTrackRepresentation();
-#else
-    return false;
-#endif
-}
 
 void MediaPlayerPrivateRemote::setTextTrackRepresentation(WebCore::TextTrackRepresentation* representation)
 {
@@ -1807,6 +1799,33 @@ void MediaPlayerPrivateRemote::isInFullscreenOrPictureInPictureChanged(bool isIn
 {
     connection().send(Messages::RemoteMediaPlayerProxy::IsInFullscreenOrPictureInPictureChanged(isInFullscreenOrPictureInPicture), m_id);
 }
+
+#if ENABLE(LINEAR_MEDIA_PLAYER)
+bool MediaPlayerPrivateRemote::supportsLinearMediaPlayer() const
+{
+    using namespace WebCore;
+
+    switch (m_remoteEngineIdentifier) {
+    case MediaPlayerMediaEngineIdentifier::AVFoundation:
+    case MediaPlayerMediaEngineIdentifier::AVFoundationMSE:
+    case MediaPlayerMediaEngineIdentifier::CocoaWebM:
+        return true;
+    case MediaPlayerMediaEngineIdentifier::AVFoundationMediaStream:
+        // FIXME: MediaStream doesn't support LinearMediaPlayer yet but should.
+        return false;
+    case MediaPlayerMediaEngineIdentifier::AVFoundationCF:
+    case MediaPlayerMediaEngineIdentifier::GStreamer:
+    case MediaPlayerMediaEngineIdentifier::GStreamerMSE:
+    case MediaPlayerMediaEngineIdentifier::HolePunch:
+    case MediaPlayerMediaEngineIdentifier::MediaFoundation:
+    case MediaPlayerMediaEngineIdentifier::MockMSE:
+        return false;
+    }
+
+    ASSERT_NOT_REACHED();
+    return false;
+}
+#endif
 
 void MediaPlayerPrivateRemote::commitAllTransactions(CompletionHandler<void()>&& completionHandler)
 {

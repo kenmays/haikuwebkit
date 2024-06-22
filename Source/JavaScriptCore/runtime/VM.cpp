@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008-2023 Apple Inc. All rights reserved.
+ * Copyright (C) 2008-2024 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -352,8 +352,6 @@ VM::VM(VMType vmType, HeapType heapType, WTF::RunLoop* runLoop, bool* success)
 
     heap.notifyIsSafeToCollect();
     
-    LLInt::Data::performAssertions(*this);
-    
     if (UNLIKELY(Options::useProfiler())) {
         m_perBytecodeProfiler = makeUnique<Profiler::Database>(*this);
 
@@ -453,7 +451,7 @@ VM::~VM()
     Locker destructionLocker { s_destructionLock.read() };
 
     if (Options::useAtomicsWaitAsync() && vmType == Default)
-        WaiterListManager::singleton().unregisterVM(this);
+        WaiterListManager::singleton().unregister(this);
 
     Gigacage::removePrimitiveDisableCallback(primitiveGigacageDisabledCallback, this);
     deferredWorkTimer->stopRunningTasks();

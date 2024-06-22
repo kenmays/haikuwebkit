@@ -113,7 +113,7 @@ public:
 
     ~InspectorThreadableLoaderClient() override = default;
 
-    void didReceiveResponse(ResourceLoaderIdentifier, const ResourceResponse& response) override
+    void didReceiveResponse(ScriptExecutionContextIdentifier, ResourceLoaderIdentifier, const ResourceResponse& response) override
     {
         m_mimeType = response.mimeType();
         m_statusCode = response.httpStatusCode();
@@ -137,7 +137,7 @@ public:
         m_responseText.append(m_decoder->decode(buffer.span()));
     }
 
-    void didFinishLoading(ResourceLoaderIdentifier, const NetworkLoadMetrics&) override
+    void didFinishLoading(ScriptExecutionContextIdentifier, ResourceLoaderIdentifier, const NetworkLoadMetrics&) override
     {
         if (m_decoder)
             m_responseText.append(m_decoder->flush());
@@ -146,7 +146,7 @@ public:
         dispose();
     }
 
-    void didFail(const ResourceError& error) override
+    void didFail(ScriptExecutionContextIdentifier, const ResourceError& error) override
     {
         m_callback->sendFailure(error.isAccessControl() ? "Loading resource for inspector failed access control check"_s : "Loading resource for inspector failed"_s);
         dispose();
@@ -573,7 +573,7 @@ void InspectorNetworkAgent::didReceiveResponse(ResourceLoaderIdentifier identifi
     if (cachedResource) {
         // Use mime type from cached resource in case the one in response is empty.
         if (resourceResponse && response.mimeType().isEmpty())
-            resourceResponse->setString(Inspector::Protocol::Network::Response::mimeTypeKey, cachedResource->response().mimeType());
+            resourceResponse->setString("mimeType"_s, cachedResource->response().mimeType());
         m_resourcesData->addCachedResource(requestId, cachedResource);
     }
 
@@ -596,12 +596,12 @@ void InspectorNetworkAgent::didReceiveResponse(ResourceLoaderIdentifier identifi
                 });
             }
             
-            resourceResponse->setString(Inspector::Protocol::Network::Response::mimeTypeKey, previousResourceData->mimeType());
+            resourceResponse->setString("mimeType"_s, previousResourceData->mimeType());
             
-            resourceResponse->setInteger(Inspector::Protocol::Network::Response::statusKey, previousResourceData->httpStatusCode());
-            resourceResponse->setString(Inspector::Protocol::Network::Response::statusTextKey, previousResourceData->httpStatusText());
+            resourceResponse->setInteger("status"_s, previousResourceData->httpStatusCode());
+            resourceResponse->setString("statusText"_s, previousResourceData->httpStatusText());
             
-            resourceResponse->setString(Inspector::Protocol::Network::Response::sourceKey, Inspector::Protocol::Helpers::getEnumConstantValue(Inspector::Protocol::Network::Response::Source::DiskCache));
+            resourceResponse->setString("source"_s, Inspector::Protocol::Helpers::getEnumConstantValue(Inspector::Protocol::Network::Response::Source::DiskCache));
         }
     }
 

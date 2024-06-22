@@ -1032,8 +1032,8 @@ WASM_SLOW_PATH_DECL(throw)
     auto instruction = pc->as<WasmThrow>();
     const Wasm::Tag& tag = instance->tag(instruction.m_exceptionIndex);
 
-    FixedVector<uint64_t> values(tag.parameterCount());
-    for (unsigned i = 0; i < tag.parameterCount(); ++i)
+    FixedVector<uint64_t> values(tag.parameterBufferSize());
+    for (unsigned i = 0; i < tag.parameterBufferSize(); ++i)
         values[i] = READ((instruction.m_firstValue - i)).encodedJSValue();
 
     JSWebAssemblyException* exception = JSWebAssemblyException::create(vm, globalObject->webAssemblyExceptionStructure(), tag, WTFMove(values));
@@ -1083,7 +1083,7 @@ WASM_SLOW_PATH_DECL(retrieve_and_clear_exception)
     const auto& handleCatch = [&](const auto& instruction) {
         JSWebAssemblyException* wasmException = jsDynamicCast<JSWebAssemblyException*>(thrownValue);
         RELEASE_ASSERT(!!wasmException);
-        payload = bitwise_cast<void*>(wasmException->payload().data());
+        payload = bitwise_cast<void*>(wasmException->payload().span().data());
         callFrame->uncheckedR(instruction.m_exception) = thrownValue;
     };
 

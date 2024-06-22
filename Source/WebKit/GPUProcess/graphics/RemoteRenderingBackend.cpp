@@ -46,7 +46,6 @@
 #include "RemoteImageBufferSet.h"
 #include "RemoteMediaPlayerManagerProxy.h"
 #include "RemoteMediaPlayerProxy.h"
-#include "RemoteRenderingBackendCreationParameters.h"
 #include "RemoteRenderingBackendMessages.h"
 #include "RemoteRenderingBackendProxyMessages.h"
 #include "RemoteSharedResourceCache.h"
@@ -101,22 +100,22 @@ bool isSmallLayerBacking(const ImageBufferParameters& parameters)
     auto checkedArea = ImageBuffer::calculateBackendSize(parameters.logicalSize, parameters.resolutionScale).area<RecordOverflow>();
     return (parameters.purpose == RenderingPurpose::LayerBacking || parameters.purpose == RenderingPurpose::BitmapOnlyLayerBacking)
         && !checkedArea.hasOverflowed() && checkedArea <= maxSmallLayerBackingArea
-        && (parameters.pixelFormat == PixelFormat::BGRA8 || parameters.pixelFormat == PixelFormat::BGRX8);
+        && (parameters.pixelFormat == ImageBufferPixelFormat::BGRA8 || parameters.pixelFormat == ImageBufferPixelFormat::BGRX8);
 }
 
-Ref<RemoteRenderingBackend> RemoteRenderingBackend::create(GPUConnectionToWebProcess& gpuConnectionToWebProcess, RemoteRenderingBackendCreationParameters&& creationParameters, Ref<IPC::StreamServerConnection>&& streamConnection)
+Ref<RemoteRenderingBackend> RemoteRenderingBackend::create(GPUConnectionToWebProcess& gpuConnectionToWebProcess, RenderingBackendIdentifier identifier, Ref<IPC::StreamServerConnection>&& streamConnection)
 {
-    auto instance = adoptRef(*new RemoteRenderingBackend(gpuConnectionToWebProcess, WTFMove(creationParameters), WTFMove(streamConnection)));
+    auto instance = adoptRef(*new RemoteRenderingBackend(gpuConnectionToWebProcess, identifier, WTFMove(streamConnection)));
     instance->startListeningForIPC();
     return instance;
 }
 
-RemoteRenderingBackend::RemoteRenderingBackend(GPUConnectionToWebProcess& gpuConnectionToWebProcess, RemoteRenderingBackendCreationParameters&& creationParameters, Ref<IPC::StreamServerConnection>&& streamConnection)
+RemoteRenderingBackend::RemoteRenderingBackend(GPUConnectionToWebProcess& gpuConnectionToWebProcess, RenderingBackendIdentifier identifier, Ref<IPC::StreamServerConnection>&& streamConnection)
     : m_workQueue(IPC::StreamConnectionWorkQueue::create("RemoteRenderingBackend work queue"_s))
     , m_streamConnection(WTFMove(streamConnection))
     , m_gpuConnectionToWebProcess(gpuConnectionToWebProcess)
     , m_sharedResourceCache(gpuConnectionToWebProcess.sharedResourceCache())
-    , m_renderingBackendIdentifier(creationParameters.identifier)
+    , m_renderingBackendIdentifier(identifier)
     , m_shapeDetectionObjectHeap(ShapeDetection::ObjectHeap::create())
 {
     ASSERT(RunLoop::isMain());
@@ -177,7 +176,7 @@ void RemoteRenderingBackend::createDisplayListRecorder(RefPtr<ImageBuffer> image
 {
     assertIsCurrent(workQueue());
     if (!imageBuffer) {
-        auto errorImage = ImageBuffer::create<NullImageBufferBackend>({ 0, 0 }, 1, DestinationColorSpace::SRGB(), PixelFormat::BGRA8, RenderingPurpose::Unspecified, { }, identifier);
+        auto errorImage = ImageBuffer::create<NullImageBufferBackend>({ 0, 0 }, 1, DestinationColorSpace::SRGB(), ImageBufferPixelFormat::BGRA8, RenderingPurpose::Unspecified, { }, identifier);
         m_remoteDisplayLists.add(identifier, RemoteDisplayListRecorder::create(*errorImage.get(), identifier, *this));
         return;
     }
@@ -195,7 +194,7 @@ void RemoteRenderingBackend::didFailCreateImageBuffer(RenderingResourceIdentifie
     // On failure to create a remote image buffer we still create a null display list recorder.
     // Commands to draw to the failed image might have already be issued and we must process
     // them.
-    auto errorImage = ImageBuffer::create<NullImageBufferBackend>({ 0, 0 }, 1, DestinationColorSpace::SRGB(), PixelFormat::BGRA8, RenderingPurpose::Unspecified, { }, imageBufferIdentifier);
+    auto errorImage = ImageBuffer::create<NullImageBufferBackend>({ 0, 0 }, 1, DestinationColorSpace::SRGB(), ImageBufferPixelFormat::BGRA8, RenderingPurpose::Unspecified, { }, imageBufferIdentifier);
     RELEASE_ASSERT(errorImage);
     m_remoteDisplayLists.add(imageBufferIdentifier, RemoteDisplayListRecorder::create(*errorImage, imageBufferIdentifier, *this));
     m_remoteImageBuffers.add(imageBufferIdentifier, RemoteImageBuffer::create(errorImage.releaseNonNull(), *this));
@@ -252,7 +251,7 @@ void RemoteRenderingBackend::moveToImageBuffer(RenderingResourceIdentifier ident
 }
 
 template<typename ImageBufferType>
-static RefPtr<ImageBuffer> allocateImageBufferInternal(const FloatSize& logicalSize, RenderingMode renderingMode, RenderingPurpose purpose, float resolutionScale, const DestinationColorSpace& colorSpace, PixelFormat pixelFormat, ImageBufferCreationContext& creationContext, RenderingResourceIdentifier imageBufferIdentifier)
+static RefPtr<ImageBuffer> allocateImageBufferInternal(const FloatSize& logicalSize, RenderingMode renderingMode, RenderingPurpose purpose, float resolutionScale, const DestinationColorSpace& colorSpace, ImageBufferPixelFormat pixelFormat, ImageBufferCreationContext& creationContext, RenderingResourceIdentifier imageBufferIdentifier)
 {
     RefPtr<ImageBuffer> imageBuffer;
 
@@ -270,7 +269,7 @@ static RefPtr<ImageBuffer> allocateImageBufferInternal(const FloatSize& logicalS
     return imageBuffer;
 }
 
-RefPtr<ImageBuffer> RemoteRenderingBackend::allocateImageBuffer(const FloatSize& logicalSize, RenderingMode renderingMode, RenderingPurpose purpose, float resolutionScale, const DestinationColorSpace& colorSpace, PixelFormat pixelFormat, ImageBufferCreationContext creationContext, RenderingResourceIdentifier imageBufferIdentifier)
+RefPtr<ImageBuffer> RemoteRenderingBackend::allocateImageBuffer(const FloatSize& logicalSize, RenderingMode renderingMode, RenderingPurpose purpose, float resolutionScale, const DestinationColorSpace& colorSpace, ImageBufferPixelFormat pixelFormat, ImageBufferCreationContext creationContext, RenderingResourceIdentifier imageBufferIdentifier)
 {
     assertIsCurrent(workQueue());
     adjustImageBufferCreationContext(m_sharedResourceCache, creationContext);
@@ -288,7 +287,7 @@ RefPtr<ImageBuffer> RemoteRenderingBackend::allocateImageBuffer(const FloatSize&
 }
 
 
-void RemoteRenderingBackend::createImageBuffer(const FloatSize& logicalSize, RenderingMode renderingMode, RenderingPurpose purpose, float resolutionScale, const DestinationColorSpace& colorSpace, PixelFormat pixelFormat, RenderingResourceIdentifier imageBufferIdentifier)
+void RemoteRenderingBackend::createImageBuffer(const FloatSize& logicalSize, RenderingMode renderingMode, RenderingPurpose purpose, float resolutionScale, const DestinationColorSpace& colorSpace, ImageBufferPixelFormat pixelFormat, RenderingResourceIdentifier imageBufferIdentifier)
 {
     assertIsCurrent(workQueue());
     RefPtr<ImageBuffer> imageBuffer = allocateImageBuffer(logicalSize, renderingMode, purpose, resolutionScale, colorSpace, pixelFormat, { }, imageBufferIdentifier);

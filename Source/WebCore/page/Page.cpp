@@ -215,6 +215,10 @@
 #include "AccessibilityRootAtspi.h"
 #endif
 
+#if ENABLE(WRITING_TOOLS)
+#include "WritingToolsController.h"
+#endif
+
 #if ENABLE(WEBXR)
 #include "NavigatorWebXR.h"
 #include "WebXRSession.h"
@@ -408,6 +412,9 @@ Page::Page(PageConfiguration&& pageConfiguration)
     , m_contentSecurityPolicyModeForExtension(WTFMove(pageConfiguration.contentSecurityPolicyModeForExtension))
     , m_badgeClient(WTFMove(pageConfiguration.badgeClient))
     , m_historyItemClient(WTFMove(pageConfiguration.historyItemClient))
+#if ENABLE(WRITING_TOOLS)
+    , m_writingToolsController(makeUniqueRef<WritingToolsController>(*this))
+#endif
 {
     updateTimerThrottlingState();
 
@@ -1869,7 +1876,7 @@ void Page::updateRendering()
 
     auto runProcessingStep = [&](RenderingUpdateStep step, const Function<void(Document&)>& perDocumentFunction) {
         m_renderingUpdateRemainingSteps.last().remove(step);
-        forEachDocument(perDocumentFunction);
+        forEachRenderableDocument(perDocumentFunction);
     };
 
     runProcessingStep(RenderingUpdateStep::RestoreScrollPositionAndViewState, [] (Document& document) {
@@ -1999,7 +2006,7 @@ void Page::doAfterUpdateRendering()
 
     auto runProcessingStep = [&](RenderingUpdateStep step, const Function<void(Document&)>& perDocumentFunction) {
         m_renderingUpdateRemainingSteps.last().remove(step);
-        forEachDocument(perDocumentFunction);
+        forEachRenderableDocument(perDocumentFunction);
     };
 
     runProcessingStep(RenderingUpdateStep::CursorUpdate, [] (Document& document) {
@@ -2007,19 +2014,19 @@ void Page::doAfterUpdateRendering()
             frame->checkedEventHandler()->updateCursorIfNeeded();
     });
 
-    forEachDocument([] (Document& document) {
+    forEachRenderableDocument([] (Document& document) {
         document.enqueuePaintTimingEntryIfNeeded();
     });
 
-    forEachDocument([] (Document& document) {
+    forEachRenderableDocument([] (Document& document) {
         document.checkedSelection()->updateAppearanceAfterUpdatingRendering();
     });
 
-    forEachDocument([] (Document& document) {
+    forEachRenderableDocument([] (Document& document) {
         document.updateHighlightPositions();
     });
 #if ENABLE(APP_HIGHLIGHTS)
-    forEachDocument([] (Document& document) {
+    forEachRenderableDocument([] (Document& document) {
         auto appHighlightStorage = document.appHighlightStorageIfExists();
         if (!appHighlightStorage)
             return;
@@ -2039,7 +2046,7 @@ void Page::doAfterUpdateRendering()
 #endif
 
 #if ENABLE(VIDEO)
-    forEachDocument([] (Document& document) {
+    forEachRenderableDocument([] (Document& document) {
         document.updateTextTrackRepresentationImageIfNeeded();
     });
 #endif
@@ -2068,7 +2075,7 @@ void Page::doAfterUpdateRendering()
     m_renderingUpdateRemainingSteps.last().remove(RenderingUpdateStep::AccessibilityRegionUpdate);
     if (shouldUpdateAccessibilityRegions()) {
         m_lastAccessibilityObjectRegionsUpdate = m_lastRenderingUpdateTimestamp;
-        forEachDocument([] (Document& document) {
+        forEachRenderableDocument([] (Document& document) {
             document.updateAccessibilityObjectRegions();
         });
     }
@@ -2078,7 +2085,7 @@ void Page::doAfterUpdateRendering()
 
     m_renderingUpdateRemainingSteps.last().remove(RenderingUpdateStep::PrepareCanvasesForDisplayOrFlush);
 
-    forEachDocument([] (Document& document) {
+    forEachRenderableDocument([] (Document& document) {
         document.prepareCanvasesForDisplayOrFlushIfNeeded();
     });
 
@@ -2195,6 +2202,10 @@ void Page::didCompleteRenderingFrame()
     // FIXME: Run WindowEventLoop tasks from here: webkit.org/b/249684.
     if (RefPtr localMainFrame = dynamicDowncast<LocalFrame>(mainFrame()))
         InspectorInstrumentation::didCompleteRenderingFrame(*localMainFrame);
+
+    forEachDocument([&] (Document& document) {
+        document.flushDeferredRenderingIsSuppressedForViewTransitionChanges();
+    });
 }
 
 void Page::prioritizeVisibleResources()
@@ -2209,7 +2220,7 @@ void Page::prioritizeVisibleResources()
 
     Vector<CachedResourceHandle<CachedResource>> toPrioritize;
 
-    forEachDocument([&] (Document& document) {
+    forEachRenderableDocument([&] (Document& document) {
         toPrioritize.appendVector(document.protectedCachedResourceLoader()->visibleResourcesToPrioritize());
     });
     
@@ -2426,7 +2437,7 @@ void Page::userStyleSheetLocationChanged()
     if (url.protocolIsData() && url.string().startsWith("data:text/css;charset=utf-8;base64,"_s)) {
         m_didLoadUserStyleSheet = true;
 
-        String styleSheetAsBase64 = base64DecodeToString(PAL::decodeURLEscapeSequences(StringView(url.string()).substring(35)), Base64DecodeMode::DefaultValidatePaddingAndIgnoreWhitespace);
+        String styleSheetAsBase64 = base64DecodeToString(PAL::decodeURLEscapeSequences(StringView(url.string()).substring(35)), { Base64DecodeOption::ValidatePadding, Base64DecodeOption::IgnoreWhitespace });
         if (!styleSheetAsBase64.isNull())
             m_userStyleSheet = styleSheetAsBase64;
     }
@@ -2710,9 +2721,9 @@ void Page::playbackControlsManagerUpdateTimerFired()
         chrome().client().clearPlaybackControlsManager();
 }
 
-void Page::playbackControlsMediaEngineChanged()
+void Page::mediaEngineChanged(HTMLMediaElement& mediaElement)
 {
-    chrome().client().playbackControlsMediaEngineChanged();
+    chrome().client().mediaEngineChanged(mediaElement);
 }
 
 #endif
@@ -3062,13 +3073,7 @@ void Page::setCurrentKeyboardScrollingAnimator(KeyboardScrollingAnimator* animat
 
 bool Page::fingerprintingProtectionsEnabled() const
 {
-    auto* localMainFrame = dynamicDowncast<LocalFrame>(mainFrame());
-    RefPtr document = localMainFrame ? localMainFrame->document() : nullptr;
-    if (!document)
-        return false;
-
-    RefPtr loader = document->loader();
-    return loader && loader->fingerprintingProtectionsEnabled();
+    return protectedMainFrame()->advancedPrivacyProtections().contains(AdvancedPrivacyProtections::FingerprintingProtections);
 }
 
 #if ENABLE(REMOTE_INSPECTOR)
@@ -3977,6 +3982,24 @@ void Page::forEachDocument(const Function<void(Document&)>& functor) const
     forEachDocumentFromMainFrame(protectedMainFrame(), functor);
 }
 
+void Page::forEachRenderableDocument(const Function<void(Document&)>& functor) const
+{
+    Vector<Ref<Document>> documents;
+    for (const auto* frame = &mainFrame(); frame; frame = frame->tree().traverseNext()) {
+        auto* localFrame = dynamicDowncast<LocalFrame>(frame);
+        if (!localFrame)
+            continue;
+        auto* document = localFrame->document();
+        if (!document)
+            continue;
+        if (document->renderingIsSuppressedForViewTransition())
+            continue;
+        documents.append(*document);
+    }
+    for (auto& document : documents)
+        functor(document);
+}
+
 void Page::forEachMediaElement(const Function<void(HTMLMediaElement&)>& functor)
 {
 #if ENABLE(VIDEO)
@@ -4826,6 +4849,53 @@ void Page::gamepadsRecentlyAccessed()
 
     chrome().client().gamepadsRecentlyAccessed();
     m_lastAccessNotificationTime = MonotonicTime::now();
+}
+#endif
+
+#if ENABLE(WRITING_TOOLS)
+void Page::willBeginWritingToolsSession(const std::optional<WritingTools::Session>& session, CompletionHandler<void(const Vector<WritingTools::Context>&)>&& completionHandler)
+{
+    m_writingToolsController->willBeginWritingToolsSession(session, WTFMove(completionHandler));
+}
+
+void Page::didBeginWritingToolsSession(const WritingTools::Session& session, const Vector<WritingTools::Context>& contexts)
+{
+    m_writingToolsController->didBeginWritingToolsSession(session, contexts);
+}
+
+void Page::proofreadingSessionDidReceiveSuggestions(const WritingTools::Session& session, const Vector<WritingTools::TextSuggestion>& suggestions, const WritingTools::Context& context, bool finished)
+{
+    m_writingToolsController->proofreadingSessionDidReceiveSuggestions(session, suggestions, context, finished);
+}
+
+void Page::proofreadingSessionDidUpdateStateForSuggestion(const WritingTools::Session& session, WritingTools::TextSuggestion::State state, const WritingTools::TextSuggestion& suggestion, const WritingTools::Context& context)
+{
+    m_writingToolsController->proofreadingSessionDidUpdateStateForSuggestion(session, state, suggestion, context);
+}
+
+void Page::didEndWritingToolsSession(const WritingTools::Session& session, bool accepted)
+{
+    m_writingToolsController->didEndWritingToolsSession(session, accepted);
+}
+
+void Page::compositionSessionDidReceiveTextWithReplacementRange(const WritingTools::Session& session, const AttributedString& attributedText, const CharacterRange& range, const WritingTools::Context& context, bool finished)
+{
+    m_writingToolsController->compositionSessionDidReceiveTextWithReplacementRange(session, attributedText, range, context, finished);
+}
+
+void Page::updateStateForSelectedSuggestionIfNeeded()
+{
+    m_writingToolsController->updateStateForSelectedSuggestionIfNeeded();
+}
+
+std::optional<SimpleRange> Page::contextRangeForSessionWithID(const WritingTools::Session::ID& sessionID) const
+{
+    return m_writingToolsController->contextRangeForSessionWithID(sessionID);
+}
+
+void Page::writingToolsSessionDidReceiveAction(const WritingTools::Session& session, WritingTools::Action action)
+{
+    m_writingToolsController->writingToolsSessionDidReceiveAction(session, action);
 }
 #endif
 

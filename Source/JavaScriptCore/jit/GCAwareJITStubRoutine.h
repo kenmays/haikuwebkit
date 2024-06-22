@@ -109,7 +109,7 @@ public:
     unsigned hash() const
     {
         if (!m_hash)
-            m_hash = computeHash(m_cases);
+            m_hash = computeHash(m_cases.span());
         return m_hash;
     }
 
@@ -231,6 +231,8 @@ Ref<PolymorphicAccessJITStubRoutine> createICJITStubRoutine(
     const MacroAssemblerCodeRef<JITStubRoutinePtrTag>&, FixedVector<Ref<AccessCase>>&& cases, FixedVector<StructureID>&& weakStructures, VM&, JSCell* owner, bool makesCalls,
     const Vector<JSCell*>&, Vector<std::unique_ptr<OptimizingCallLinkInfo>, 16>&& callLinkInfos,
     CodeBlock* codeBlockForExceptionHandlers, DisposableCallSiteIndex exceptionHandlingCallSiteIndex);
+
+Ref<PolymorphicAccessJITStubRoutine> createPreCompiledICJITStubRoutine(const MacroAssemblerCodeRef<JITStubRoutinePtrTag>&, VM&);
 
 } // namespace JSC
 

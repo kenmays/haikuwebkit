@@ -69,6 +69,7 @@
 #include "RenderSVGModelObject.h"
 #include "RenderScrollbarPart.h"
 #include "RenderTableRow.h"
+#include "RenderTextControl.h"
 #include "RenderTheme.h"
 #include "RenderTreeBuilder.h"
 #include "RenderView.h"
@@ -535,8 +536,12 @@ static inline bool objectIsRelayoutBoundary(const RenderElement* object)
     if (object->isRenderView())
         return true;
 
-    if (object->isRenderTextControl())
-        return true;
+    if (auto* textControl = dynamicDowncast<RenderTextControl>(*object)) {
+        if (!textControl->isFlexItem() && !textControl->isGridItem()) {
+            // Flexing type of layout systems may compute different size than what input's preferred width is which won't happen unless they run their layout as well.
+            return true;
+        }
+    }
 
     if (object->shouldApplyLayoutContainment() && object->shouldApplySizeContainment())
         return true;
@@ -560,17 +565,22 @@ static inline bool objectIsRelayoutBoundary(const RenderElement* object)
     return true;
 }
 
-void RenderObject::clearNeedsLayout(EverHadSkippedContentLayout everHadSkippedContentLayout)
+void RenderObject::clearNeedsLayout(HadSkippedLayout hadSkippedLayout)
 {
-    m_stateBitfields.clearFlag(StateFlag::NeedsLayout);
+    // FIXME: Consider not setting the "ever had layout" bit to true when "hadSkippedLayout"
     setEverHadLayout();
-    setEverHadSkippedContentLayout(everHadSkippedContentLayout == EverHadSkippedContentLayout::Yes);
+    setHadSkippedLayout(hadSkippedLayout == HadSkippedLayout::Yes);
+
+    if (auto* renderElement = dynamicDowncast<RenderElement>(*this)) {
+        renderElement->setAncestorLineBoxDirty(false);
+        renderElement->setLayoutIdentifier(renderElement->view().frameView().layoutContext().layoutIdentifier());
+    }
+    m_stateBitfields.clearFlag(StateFlag::NeedsLayout);
     setPosChildNeedsLayoutBit(false);
     setNeedsSimplifiedNormalFlowLayoutBit(false);
     setNormalChildNeedsLayoutBit(false);
+    setOutOfFlowChildNeedsStaticPositionLayoutBit(false);
     setNeedsPositionedMovementLayoutBit(false);
-    if (auto* renderElement = dynamicDowncast<RenderElement>(*this))
-        renderElement->setAncestorLineBoxDirty(false);
 #if ASSERT_ENABLED
     checkBlockPositionedObjectsNeedLayout();
 #endif
@@ -588,6 +598,8 @@ void RenderObject::scheduleLayout(RenderElement* layoutRoot)
 RenderElement* RenderObject::markContainingBlocksForLayout(RenderElement* layoutRoot)
 {
     ASSERT(!isSetNeedsLayoutForbidden());
+    if (is<RenderView>(*this))
+        return downcast<RenderElement>(this);
 
     CheckedPtr ancestor = container();
 
@@ -836,7 +848,7 @@ IntRect RenderObject::absoluteBoundingBoxRect(bool useTransforms, bool* wasFixed
     if (useTransforms) {
         Vector<FloatQuad> quads;
         absoluteQuads(quads, wasFixed);
-        return enclosingIntRect(unitedBoundingBoxes(quads));
+        return enclosingIntRect(unitedBoundingBoxes(quads)).toRectWithExtentsClippedToNumericLimits();
     }
 
     FloatPoint absPos = localToAbsolute(FloatPoint(), { } /* ignore transforms */, wasFixed);
@@ -848,7 +860,7 @@ IntRect RenderObject::absoluteBoundingBoxRect(bool useTransforms, bool* wasFixed
         return IntRect();
 
     LayoutRect result = unionRect(rects);
-    return snappedIntRect(result);
+    return snappedIntRect(result).toRectWithExtentsClippedToNumericLimits();
 }
 
 void RenderObject::absoluteFocusRingQuads(Vector<FloatQuad>& quads)
@@ -1453,7 +1465,14 @@ void RenderObject::outputRenderObject(TextStream& stream, bool mark, int depth) 
             stream << "[simplified]";
         if (needsPositionedMovementLayout())
             stream << "[positioned movement]";
+        if (outOfFlowChildNeedsStaticPositionLayout())
+            stream << "[out of flow child needs parent layout]";
     }
+    stream << " layout id->";
+    if (auto* renderElement = dynamicDowncast<RenderElement>(*this))
+        stream << "[" << renderElement->layoutIdentifier() << "]";
+    else
+        stream << "[n/a]";
     stream.nextLine();
 }
 
@@ -1783,6 +1802,26 @@ bool RenderObject::isSelectionBorder() const
         || st == HighlightState::Both
         || view().selection().start() == this
         || view().selection().end() == this;
+}
+
+void RenderObject::setCapturedInViewTransition(bool captured)
+{
+    if (capturedInViewTransition() != captured) {
+        m_stateBitfields.setFlag(StateFlag::CapturedInViewTransition, captured);
+
+        CheckedPtr<RenderLayer> layerToInvalidate;
+        if (isDocumentElementRenderer())
+            layerToInvalidate = view().layer();
+        else if (hasLayer())
+            layerToInvalidate = downcast<RenderLayerModelObject>(*this).layer();
+
+        if (layerToInvalidate) {
+            layerToInvalidate->setNeedsPostLayoutCompositingUpdate();
+
+            // Invalidate transform applied by `RenderLayerBacking::updateTransform`.
+            layerToInvalidate->setNeedsCompositingGeometryUpdate();
+        }
+    }
 }
 
 void RenderObject::willBeDestroyed()
@@ -2395,6 +2434,22 @@ void RenderObject::RepaintRects::transform(const TransformationMatrix& matrix, f
         *outlineBoundsRect = clippedOverflowRect;
     else if (outlineBoundsRect)
         *outlineBoundsRect = LayoutRect(encloseRectToDevicePixels(matrix.mapRect(*outlineBoundsRect), deviceScaleFactor));
+}
+
+bool RenderObject::effectiveCapturedInViewTransition() const
+{
+    if (isDocumentElementRenderer())
+        return false;
+    if (isRenderView())
+        return document().activeViewTransitionCapturedDocumentElement();
+    return capturedInViewTransition();
+}
+
+PointerEvents RenderObject::usedPointerEvents() const
+{
+    if (document().renderingIsSuppressedForViewTransition() && !isDocumentElementRenderer())
+        return PointerEvents::None;
+    return style().usedPointerEvents();
 }
 
 #if PLATFORM(IOS_FAMILY)

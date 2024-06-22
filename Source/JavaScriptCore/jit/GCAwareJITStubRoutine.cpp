@@ -141,6 +141,9 @@ void PolymorphicAccessJITStubRoutine::invalidate()
 
 unsigned PolymorphicAccessJITStubRoutine::computeHash(std::span<const Ref<AccessCase>> cases)
 {
+    if (cases.size() == 1)
+        return cases.front()->hash();
+
     Hasher hasher;
     for (auto& key : cases)
         WTF::add(hasher, key->hash());
@@ -284,6 +287,11 @@ Ref<PolymorphicAccessJITStubRoutine> createICJITStubRoutine(
     constexpr bool isCodeImmutable = false;
     stub->makeGCAware(vm, isCodeImmutable);
     return stub;
+}
+
+Ref<PolymorphicAccessJITStubRoutine> createPreCompiledICJITStubRoutine(const MacroAssemblerCodeRef<JITStubRoutinePtrTag>& code, VM& vm)
+{
+    return adoptRef(*new PolymorphicAccessJITStubRoutine(JITStubRoutine::Type::PolymorphicAccessJITStubRoutineType, code, vm, { }, { }, nullptr));
 }
 
 } // namespace JSC

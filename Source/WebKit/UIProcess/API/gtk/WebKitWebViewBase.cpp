@@ -191,12 +191,19 @@ struct MotionEvent {
             yRoot = rootPoint.y();
         }
 
-        MotionEvent(FloatPoint(x, y), FloatPoint(xRoot, yRoot), state);
+        position = FloatPoint(x, y);
+        globalPosition = FloatPoint(xRoot, yRoot);
+        setState(state);
     }
 
     MotionEvent(FloatPoint&& position, FloatPoint&& globalPosition, GdkModifierType state)
         : position(WTFMove(position))
         , globalPosition(WTFMove(globalPosition))
+    {
+        setState(state);
+    }
+
+    void setState(GdkModifierType state)
     {
         if (state & GDK_CONTROL_MASK)
             modifiers.add(WebEventModifier::ControlKey);
@@ -1738,7 +1745,7 @@ static gboolean webkitWebViewBaseCrossingNotifyEvent(GtkWidget* widget, GdkEvent
     // Do not send mouse move events to the WebProcess for crossing events during testing.
     // WTR never generates crossing events and they can confuse tests.
     // https://bugs.webkit.org/show_bug.cgi?id=185072.
-    if (UNLIKELY(priv->pageProxy->process().processPool().configuration().fullySynchronousModeIsAllowedForTesting()))
+    if (UNLIKELY(priv->pageProxy->configuration().processPool().configuration().fullySynchronousModeIsAllowedForTesting()))
         return GDK_EVENT_PROPAGATE;
 #endif
 
@@ -1789,7 +1796,7 @@ static void webkitWebViewBaseEnter(WebKitWebViewBase* webViewBase, double x, dou
     // Do not send mouse move events to the WebProcess for crossing events during testing.
     // WTR never generates crossing events and they can confuse tests.
     // https://bugs.webkit.org/show_bug.cgi?id=185072.
-    if (UNLIKELY(priv->pageProxy->process().processPool().configuration().fullySynchronousModeIsAllowedForTesting()))
+    if (UNLIKELY(priv->pageProxy->configuration().processPool().configuration().fullySynchronousModeIsAllowedForTesting()))
         return;
 #endif
 
@@ -1829,7 +1836,7 @@ static void webkitWebViewBaseLeave(WebKitWebViewBase* webViewBase, GdkCrossingMo
     // Do not send mouse move events to the WebProcess for crossing events during testing.
     // WTR never generates crossing events and they can confuse tests.
     // https://bugs.webkit.org/show_bug.cgi?id=185072.
-    if (UNLIKELY(priv->pageProxy->process().processPool().configuration().fullySynchronousModeIsAllowedForTesting()))
+    if (UNLIKELY(priv->pageProxy->configuration().processPool().configuration().fullySynchronousModeIsAllowedForTesting()))
         return;
 #endif
 
@@ -3051,7 +3058,7 @@ RefPtr<WebKit::ViewSnapshot> webkitWebViewBaseTakeViewSnapshot(WebKitWebViewBase
         return nullptr;
 
     graphene_rect_t viewport = { { 0, 0 }, { static_cast<float>(size.width()), static_cast<float>(size.height()) } };
-    GdkTexture* texture = gsk_renderer_render_texture(renderer, renderNode.get(), &viewport);
+    GRefPtr<GdkTexture> texture = adoptGRef(gsk_renderer_render_texture(renderer, renderNode.get(), &viewport));
 
     return ViewSnapshot::create(WTFMove(texture));
 #endif

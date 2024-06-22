@@ -549,6 +549,11 @@ void GPUProcessProxy::processIsReadyToExit()
     gpuProcessExited(ProcessTerminationReason::IdleExit); // May cause |this| to get deleted.
 }
 
+void GPUProcessProxy::childConnectionDidBecomeUnresponsive()
+{
+    didBecomeUnresponsive();
+}
+
 void GPUProcessProxy::terminateForTesting()
 {
     processIsReadyToExit();
@@ -715,7 +720,7 @@ void GPUProcessProxy::didCreateContextForVisibilityPropagation(WebPageProxyIdent
         RELEASE_LOG(Process, "GPUProcessProxy::didCreateContextForVisibilityPropagation() No WebPageProxy with this identifier");
         return;
     }
-    if (page->webPageID() == pageID) {
+    if (page->webPageIDInMainFrameProcess() == pageID) {
         page->didCreateContextInGPUProcessForVisibilityPropagation(contextID);
         return;
     }

@@ -848,9 +848,9 @@ TracePerfTest::TracePerfTest(std::unique_ptr<const TracePerfParams> params)
       mStartFrame(0),
       mEndFrame(0)
 {
-    bool isAMD      = IsAMD() && !mParams->isSwiftshader();
-    bool isAMDLinux = isAMD && IsLinux();
-    // bool isAMDLinuxANGLE  = isAMDLinux && mParams->isANGLE();
+    bool isAMD            = IsAMD() && !mParams->isSwiftshader();
+    bool isAMDLinux       = isAMD && IsLinux();
+    bool isAMDLinuxANGLE  = isAMDLinux && mParams->isANGLE();
     bool isAMDLinuxNative = isAMDLinux && !mParams->isANGLE();
     bool isAMDWin         = isAMD && IsWindows();
     bool isAMDWinANGLE    = isAMDWin && mParams->isANGLE();
@@ -1497,6 +1497,10 @@ TracePerfTest::TracePerfTest(std::unique_ptr<const TracePerfParams> params)
 
     if (traceNameIs("antutu_refinery"))
     {
+        if (isIntelLinuxANGLE || isAMDLinuxANGLE)
+        {
+            skipTest("https://anglebug.com/342545097 fails on Mesa 23.2.1");
+        }
         addExtensionPrerequisite("GL_ANDROID_extension_pack_es31a");
     }
 
@@ -1754,6 +1758,16 @@ TracePerfTest::TracePerfTest(std::unique_ptr<const TracePerfParams> params)
         if (isIntelLinuxNative)
         {
             skipTest("https://anglebug.com/8682 fails on newer OS/driver");
+        }
+    }
+
+    if (traceNameIs("modern_combat_5"))
+    {
+        if (IsPixel6() && !IsAndroid14OrNewer())
+        {
+            skipTest(
+                "https://issuetracker.google.com/42267261 Causing thermal failures on Pixel 6 with "
+                "Android 13");
         }
     }
 

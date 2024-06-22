@@ -101,6 +101,7 @@
 #include <WebCore/Settings.h>
 #include <WebCore/TextIndicator.h>
 #include <WebCore/TextRecognitionOptions.h>
+#include <WebCore/ViewportConfiguration.h>
 #include <WebCore/WindowFeatures.h>
 
 #if HAVE(WEBGPU_IMPLEMENTATION)
@@ -971,13 +972,13 @@ WebCore::DisplayRefreshMonitorFactory* WebChromeClient::displayRefreshMonitorFac
 }
 
 #if ENABLE(GPU_PROCESS)
-RefPtr<ImageBuffer> WebChromeClient::createImageBuffer(const FloatSize& size, RenderingPurpose purpose, float resolutionScale, const DestinationColorSpace& colorSpace, PixelFormat pixelFormat, OptionSet<ImageBufferOptions> options) const
+RefPtr<ImageBuffer> WebChromeClient::createImageBuffer(const FloatSize& size, RenderingPurpose purpose, float resolutionScale, const DestinationColorSpace& colorSpace, ImageBufferPixelFormat pixelFormat, OptionSet<ImageBufferOptions> options) const
 {
     if (!WebProcess::singleton().shouldUseRemoteRenderingFor(purpose)) {
         if (purpose != RenderingPurpose::ShareableSnapshot && purpose != RenderingPurpose::ShareableLocalSnapshot)
             return nullptr;
 
-        return ImageBuffer::create<ImageBufferShareableBitmapBackend>(size, resolutionScale, colorSpace, PixelFormat::BGRA8, purpose, { });
+        return ImageBuffer::create<ImageBufferShareableBitmapBackend>(size, resolutionScale, colorSpace, ImageBufferPixelFormat::BGRA8, purpose, { });
     }
 
     return protectedPage()->ensureRemoteRenderingBackendProxy().createImageBuffer(size, purpose, resolutionScale, colorSpace, pixelFormat, options);
@@ -994,7 +995,7 @@ RefPtr<ImageBuffer> WebChromeClient::sinkIntoImageBuffer(std::unique_ptr<Seriali
 
 std::unique_ptr<WebCore::WorkerClient> WebChromeClient::createWorkerClient(SerialFunctionDispatcher& dispatcher)
 {
-    return WebWorkerClient::create(protectedPage(), dispatcher).moveToUniquePtr();
+    return WebWorkerClient::create(*protectedPage()->corePage(), dispatcher).moveToUniquePtr();
 }
 
 #if ENABLE(WEBGL)
@@ -1002,11 +1003,7 @@ RefPtr<GraphicsContextGL> WebChromeClient::createGraphicsContextGL(const Graphic
 {
 #if ENABLE(GPU_PROCESS)
     if (WebProcess::singleton().shouldUseRemoteRenderingForWebGL())
-        return RemoteGraphicsContextGLProxy::create(WebProcess::singleton().ensureGPUProcessConnection().connection(), attributes, protectedPage()->ensureRemoteRenderingBackendProxy()
-#if ENABLE(VIDEO)
-            , WebProcess::singleton().ensureGPUProcessConnection().videoFrameObjectHeapProxy()
-#endif
-        );
+        return RemoteGraphicsContextGLProxy::create(attributes, protectedPage());
 #endif
     return WebCore::createWebProcessGraphicsContextGL(attributes);
 }
@@ -1016,7 +1013,7 @@ RefPtr<GraphicsContextGL> WebChromeClient::createGraphicsContextGL(const Graphic
 RefPtr<WebCore::WebGPU::GPU> WebChromeClient::createGPUForWebGPU() const
 {
 #if ENABLE(GPU_PROCESS)
-    return RemoteGPUProxy::create(WebProcess::singleton().ensureGPUProcessConnection().connection(), WebGPU::DowncastConvertToBackingContext::create(), WebGPUIdentifier::generate(), protectedPage()->ensureRemoteRenderingBackendProxy().ensureBackendCreated());
+    return RemoteGPUProxy::create(WebGPU::DowncastConvertToBackingContext::create(), protectedPage());
 #else
     return WebCore::WebGPU::create([](WebCore::WebGPU::WorkItem&& workItem) {
         callOnMainRunLoop(WTFMove(workItem));
@@ -1030,7 +1027,11 @@ RefPtr<WebCore::ShapeDetection::BarcodeDetector> WebChromeClient::createBarcodeD
 #if ENABLE(GPU_PROCESS)
     auto page = protectedPage();
     auto& remoteRenderingBackendProxy = page->ensureRemoteRenderingBackendProxy();
-    return ShapeDetection::RemoteBarcodeDetectorProxy::create(remoteRenderingBackendProxy.streamConnection(), remoteRenderingBackendProxy.renderingBackendIdentifier(), ShapeDetectionIdentifier::generate(), barcodeDetectorOptions);
+    // FIXME(https://bugs.webkit.org/show_bug.cgi?id=275245): Does not work when GPUP crashes.
+    RefPtr connection = remoteRenderingBackendProxy.connection();
+    if (!connection)
+        return nullptr;
+    return ShapeDetection::RemoteBarcodeDetectorProxy::create(connection.releaseNonNull(), remoteRenderingBackendProxy.renderingBackendIdentifier(), ShapeDetectionIdentifier::generate(), barcodeDetectorOptions);
 #elif HAVE(SHAPE_DETECTION_API_IMPLEMENTATION)
     return WebCore::ShapeDetection::BarcodeDetectorImpl::create(barcodeDetectorOptions);
 #else
@@ -1043,7 +1044,13 @@ void WebChromeClient::getBarcodeDetectorSupportedFormats(CompletionHandler<void(
 #if ENABLE(GPU_PROCESS)
     auto page = protectedPage();
     auto& remoteRenderingBackendProxy = page->ensureRemoteRenderingBackendProxy();
-    ShapeDetection::RemoteBarcodeDetectorProxy::getSupportedFormats(remoteRenderingBackendProxy.streamConnection(), remoteRenderingBackendProxy.renderingBackendIdentifier(), WTFMove(completionHandler));
+    // FIXME(https://bugs.webkit.org/show_bug.cgi?id=275245): Does not work when GPUP crashes.
+    RefPtr connection = remoteRenderingBackendProxy.connection();
+    if (!connection) {
+        completionHandler({ });
+        return;
+    }
+    ShapeDetection::RemoteBarcodeDetectorProxy::getSupportedFormats(connection.releaseNonNull(), remoteRenderingBackendProxy.renderingBackendIdentifier(), WTFMove(completionHandler));
 #elif HAVE(SHAPE_DETECTION_API_IMPLEMENTATION)
     WebCore::ShapeDetection::BarcodeDetectorImpl::getSupportedFormats(WTFMove(completionHandler));
 #else
@@ -1056,7 +1063,11 @@ RefPtr<WebCore::ShapeDetection::FaceDetector> WebChromeClient::createFaceDetecto
 #if ENABLE(GPU_PROCESS)
     auto page = protectedPage();
     auto& remoteRenderingBackendProxy = page->ensureRemoteRenderingBackendProxy();
-    return ShapeDetection::RemoteFaceDetectorProxy::create(remoteRenderingBackendProxy.streamConnection(), remoteRenderingBackendProxy.renderingBackendIdentifier(), ShapeDetectionIdentifier::generate(), faceDetectorOptions);
+    // FIXME(https://bugs.webkit.org/show_bug.cgi?id=275245): Does not work when GPUP crashes.
+    RefPtr connection = remoteRenderingBackendProxy.connection();
+    if (!connection)
+        return nullptr;
+    return ShapeDetection::RemoteFaceDetectorProxy::create(connection.releaseNonNull(), remoteRenderingBackendProxy.renderingBackendIdentifier(), ShapeDetectionIdentifier::generate(), faceDetectorOptions);
 #elif HAVE(SHAPE_DETECTION_API_IMPLEMENTATION)
     return WebCore::ShapeDetection::FaceDetectorImpl::create(faceDetectorOptions);
 #else
@@ -1069,7 +1080,11 @@ RefPtr<WebCore::ShapeDetection::TextDetector> WebChromeClient::createTextDetecto
 #if ENABLE(GPU_PROCESS)
     auto page = protectedPage();
     auto& remoteRenderingBackendProxy = page->ensureRemoteRenderingBackendProxy();
-    return ShapeDetection::RemoteTextDetectorProxy::create(remoteRenderingBackendProxy.streamConnection(), remoteRenderingBackendProxy.renderingBackendIdentifier(), ShapeDetectionIdentifier::generate());
+    // FIXME(https://bugs.webkit.org/show_bug.cgi?id=275245): Does not work when GPUP crashes.
+    RefPtr connection = remoteRenderingBackendProxy.connection();
+    if (!connection)
+        return nullptr;
+    return ShapeDetection::RemoteTextDetectorProxy::create(connection.releaseNonNull(), remoteRenderingBackendProxy.renderingBackendIdentifier(), ShapeDetectionIdentifier::generate());
 #elif HAVE(SHAPE_DETECTION_API_IMPLEMENTATION)
     return WebCore::ShapeDetection::TextDetectorImpl::create();
 #else
@@ -1185,9 +1200,9 @@ void WebChromeClient::ensureScrollbarsController(Page& corePage, ScrollableArea&
     
     switch (page->drawingArea()->type()) {
     case DrawingAreaType::RemoteLayerTree: {
-        if (!area.usesAsyncScrolling() && (!currentScrollbarsController || is<RemoteScrollbarsController>(currentScrollbarsController)))
+        if (!area.usesCompositedScrolling() && (!currentScrollbarsController || is<RemoteScrollbarsController>(currentScrollbarsController)))
             area.setScrollbarsController(ScrollbarsController::create(area));
-        else if (area.usesAsyncScrolling() && (!currentScrollbarsController || !is<RemoteScrollbarsController>(currentScrollbarsController)))
+        else if (area.usesCompositedScrolling() && (!currentScrollbarsController || !is<RemoteScrollbarsController>(currentScrollbarsController)))
             area.setScrollbarsController(makeUnique<RemoteScrollbarsController>(area, corePage.scrollingCoordinator()));
         return;
     }
@@ -1253,9 +1268,9 @@ void WebChromeClient::clearPlaybackControlsManager()
     protectedPage()->playbackSessionManager().clearPlaybackControlsManager();
 }
 
-void WebChromeClient::playbackControlsMediaEngineChanged()
+void WebChromeClient::mediaEngineChanged(WebCore::HTMLMediaElement& mediaElement)
 {
-    protectedPage()->playbackSessionManager().mediaEngineChanged();
+    protectedPage()->playbackSessionManager().mediaEngineChanged(mediaElement);
 }
 
 #endif
@@ -1742,6 +1757,15 @@ void WebChromeClient::textAutosizingUsesIdempotentModeChanged()
 
 #endif
 
+#if ENABLE(META_VIEWPORT)
+
+double WebChromeClient::baseViewportLayoutSizeScaleFactor() const
+{
+    return protectedPage()->baseViewportLayoutSizeScaleFactor();
+}
+
+#endif
+
 #if ENABLE(MEDIA_CONTROLS_CONTEXT_MENUS) && USE(UICONTEXTMENU)
 
 void WebChromeClient::showMediaControlsContextMenu(FloatRect&& targetFrame, Vector<MediaControlsContextMenuItem>&& items, CompletionHandler<void(MediaControlsContextMenuItem::ID)>&& completionHandler)
@@ -1818,6 +1842,44 @@ void WebChromeClient::gamepadsRecentlyAccessed()
 {
     protectedPage()->gamepadsRecentlyAccessed();
 }
+#endif
+
+#if ENABLE(WRITING_TOOLS)
+
+void WebChromeClient::proofreadingSessionShowDetailsForSuggestionWithIDRelativeToRect(const WebCore::WritingTools::Session::ID& sessionID, const WebCore::WritingTools::TextSuggestion::ID& replacementID, WebCore::IntRect selectionBoundsInRootView)
+{
+    protectedPage()->proofreadingSessionShowDetailsForSuggestionWithIDRelativeToRect(sessionID, replacementID, selectionBoundsInRootView);
+}
+
+void WebChromeClient::proofreadingSessionUpdateStateForSuggestionWithID(const WritingTools::Session::ID& sessionID, WritingTools::TextSuggestion::State state, const WritingTools::TextSuggestion::ID& replacementID)
+{
+    protectedPage()->proofreadingSessionUpdateStateForSuggestionWithID(sessionID, state, replacementID);
+}
+
+#endif
+
+#if ENABLE(WRITING_TOOLS_UI)
+
+void WebChromeClient::removeTextAnimationForID(const WritingTools::Session::ID& sessionID)
+{
+    protectedPage()->removeTextAnimationForID(sessionID);
+}
+
+void WebChromeClient::cleanUpTextAnimationsForSessionID(const WritingTools::Session::ID& sessionID)
+{
+    protectedPage()->cleanUpTextAnimationsForSessionID(sessionID);
+}
+
+void WebChromeClient::addSourceTextAnimation(const WritingTools::Session::ID& sessionID, const CharacterRange& range)
+{
+    protectedPage()->addSourceTextAnimation(sessionID, range);
+}
+
+void WebChromeClient::addDestinationTextAnimation(const WritingTools::Session::ID& sessionID, const CharacterRange& range)
+{
+    protectedPage()->addDestinationTextAnimation(sessionID, range);
+}
+
 #endif
 
 } // namespace WebKit

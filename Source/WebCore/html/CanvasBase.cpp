@@ -67,23 +67,6 @@ CanvasBase::~CanvasBase()
     m_canvasNoiseHashSalt = std::nullopt;
 }
 
-GraphicsContext* CanvasBase::drawingContext() const
-{
-    auto* context = renderingContext();
-    if (context && !context->is2d() && !context->isOffscreen2d())
-        return nullptr;
-
-    return buffer() ? &m_imageBuffer->context() : nullptr;
-}
-
-GraphicsContext* CanvasBase::existingDrawingContext() const
-{
-    if (!hasCreatedImageBuffer())
-        return nullptr;
-
-    return drawingContext();
-}
-
 ImageBuffer* CanvasBase::buffer() const
 {
     if (!hasCreatedImageBuffer())
@@ -91,18 +74,13 @@ ImageBuffer* CanvasBase::buffer() const
     return m_imageBuffer.get();
 }
 
-AffineTransform CanvasBase::baseTransform() const
-{
-    ASSERT(hasCreatedImageBuffer());
-    return m_imageBuffer->baseTransform();
-}
-
 RefPtr<ImageBuffer> CanvasBase::makeRenderingResultsAvailable(ShouldApplyPostProcessingToDirtyRect shouldApplyPostProcessingToDirtyRect)
 {
     if (auto* context = renderingContext()) {
-        context->drawBufferToCanvas(CanvasRenderingContext::SurfaceBuffer::DrawingBuffer);
+        RefPtr buffer = context->surfaceBufferToImageBuffer(CanvasRenderingContext::SurfaceBuffer::DrawingBuffer);
         if (m_canvasNoiseHashSalt && shouldApplyPostProcessingToDirtyRect == ShouldApplyPostProcessingToDirtyRect::Yes)
-            m_canvasNoiseInjection.postProcessDirtyCanvasBuffer(buffer(), *m_canvasNoiseHashSalt, context->is2d() ? CanvasNoiseInjectionPostProcessArea::DirtyRect : CanvasNoiseInjectionPostProcessArea::FullBuffer);
+            m_canvasNoiseInjection.postProcessDirtyCanvasBuffer(buffer.get(), *m_canvasNoiseHashSalt, context->is2d() ? CanvasNoiseInjectionPostProcessArea::DirtyRect : CanvasNoiseInjectionPostProcessArea::FullBuffer);
+        return buffer;
     }
     return buffer();
 }
@@ -320,7 +298,7 @@ RefPtr<ImageBuffer> CanvasBase::allocateImageBuffer() const
 
     auto* context = renderingContext();
     auto colorSpace = context ? context->colorSpace() : DestinationColorSpace::SRGB();
-    auto pixelFormat = context ? context->pixelFormat() : PixelFormat::BGRA8;
+    auto pixelFormat = context ? context->pixelFormat() : ImageBufferPixelFormat::BGRA8;
     bool willReadFrequently = context ? context->willReadFrequently() : false;
 
     OptionSet<ImageBufferOptions> bufferOptions;

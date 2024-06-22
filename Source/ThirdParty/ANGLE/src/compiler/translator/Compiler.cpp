@@ -561,8 +561,10 @@ bool TCompiler::checkShaderVersion(TParseContext *parseContext)
             }
             else if (mShaderVersion == 310)
             {
-                if (!parseContext->checkCanUseExtension(sh::TSourceLoc(),
-                                                        TExtension::EXT_tessellation_shader))
+                if (!parseContext->checkCanUseOneOfExtensions(
+                        sh::TSourceLoc(),
+                        std::array<TExtension, 2u>{{TExtension::EXT_tessellation_shader,
+                                                    TExtension::OES_tessellation_shader}}))
                 {
                     return false;
                 }
@@ -756,6 +758,14 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
     // Desktop GLSL shaders don't have precision, so don't expect them to be specified.
     mValidateASTOptions.validatePrecision = !IsDesktopGLSpec(mShaderSpec);
 
+    // Disallow expressions deemed too complex.
+    // This needs to be checked before other functions that will traverse the AST
+    // to prevent potential stack overflow crashes.
+    if (compileOptions.limitExpressionComplexity && !limitExpressionComplexity(root))
+    {
+        return false;
+    }
+
     if (!validateAST(root))
     {
         return false;
@@ -777,12 +787,6 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
             mDiagnostics.globalError("internal compiler error translating pixel local storage");
             return false;
         }
-    }
-
-    // Disallow expressions deemed too complex.
-    if (compileOptions.limitExpressionComplexity && !limitExpressionComplexity(root))
-    {
-        return false;
     }
 
     if (shouldRunLoopAndIndexingValidation(compileOptions) &&
@@ -1435,6 +1439,7 @@ void TCompiler::setResourceString()
         << ":OES_shader_multisample_interpolation:" << mResources.OES_shader_multisample_interpolation
         << ":OES_shader_image_atomic:" << mResources.OES_shader_image_atomic
         << ":EXT_tessellation_shader:" << mResources.EXT_tessellation_shader
+        << ":OES_tessellation_shader:" << mResources.OES_tessellation_shader
         << ":OES_texture_buffer:" << mResources.OES_texture_buffer
         << ":EXT_texture_buffer:" << mResources.EXT_texture_buffer
         << ":OES_sample_variables:" << mResources.OES_sample_variables

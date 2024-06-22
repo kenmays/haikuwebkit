@@ -101,7 +101,6 @@ Modules/cache/DOMCache.cpp
 Modules/cache/DOMCacheEngine.cpp
 Modules/cache/DOMCacheStorage.cpp
 Modules/cache/WindowOrWorkerGlobalScopeCaches.cpp
-Modules/cache/WorkerCacheStorageConnection.cpp
 Modules/compression/CompressionStreamEncoder.cpp
 Modules/compression/DecompressionStreamDecoder.cpp
 Modules/contact-picker/ContactsManager.cpp
@@ -819,6 +818,7 @@ crypto/keys/CryptoKeyRSA.cpp
 crypto/keys/CryptoKeyRSAComponents.cpp
 crypto/keys/CryptoKeyRaw.cpp
 css/BasicShapeFunctions.cpp
+css/CSSAnchorValue.cpp
 css/CSSAspectRatioValue.cpp
 css/CSSBackgroundRepeatValue.cpp
 css/CSSBasicShapes.cpp
@@ -1530,7 +1530,8 @@ html/ValidatedFormListedElement.cpp
 html/ValidationMessage.cpp
 html/WeekInputType.cpp
 html/canvas/ANGLEInstancedArrays.cpp
-html/canvas/CanvasFilterTargetSwitcher.cpp
+html/canvas/CanvasLayerContextSwitcher.cpp
+html/canvas/CanvasFilterContextSwitcher.cpp
 html/canvas/CanvasGradient.cpp
 html/canvas/CanvasPath.cpp
 html/canvas/CanvasPattern.cpp
@@ -1744,6 +1745,7 @@ inspector/agents/page/PageDebuggerAgent.cpp
 inspector/agents/page/PageHeapAgent.cpp
 inspector/agents/page/PageNetworkAgent.cpp
 inspector/agents/page/PageRuntimeAgent.cpp
+inspector/agents/page/PageWorkerAgent.cpp
 inspector/agents/worker/ServiceWorkerAgent.cpp
 inspector/agents/worker/WorkerAuditAgent.cpp
 inspector/agents/worker/WorkerCanvasAgent.cpp
@@ -1752,6 +1754,7 @@ inspector/agents/worker/WorkerDOMDebuggerAgent.cpp
 inspector/agents/worker/WorkerDebuggerAgent.cpp
 inspector/agents/worker/WorkerNetworkAgent.cpp
 inspector/agents/worker/WorkerRuntimeAgent.cpp
+inspector/agents/worker/WorkerWorkerAgent.cpp
 layout/formattingContexts/FormattingContext.cpp
 layout/formattingContexts/FormattingGeometry.cpp
 layout/formattingContexts/FormattingQuirks.cpp
@@ -2281,6 +2284,7 @@ platform/graphics/AlphaPremultiplication.cpp
 platform/graphics/AnimationFrameRate.cpp
 platform/graphics/BifurcatedGraphicsContext.cpp
 platform/graphics/BitmapImage.cpp
+platform/graphics/BitmapImageDescriptor.cpp
 platform/graphics/BitmapImageSource.cpp
 platform/graphics/ByteArrayPixelBuffer.cpp
 platform/graphics/CachedSubimage.cpp
@@ -2338,6 +2342,7 @@ platform/graphics/GraphicsContext.cpp
 platform/graphics/GraphicsContextGL.cpp
 platform/graphics/GraphicsContextGLImageExtractor.cpp
 platform/graphics/GraphicsContextState.cpp
+platform/graphics/GraphicsContextSwitcher.cpp
 platform/graphics/GraphicsLayer.cpp
 platform/graphics/GraphicsLayerContentsDisplayDelegate.cpp
 platform/graphics/GraphicsLayerTransform.cpp
@@ -2350,7 +2355,7 @@ platform/graphics/ImageAdapter.cpp
 platform/graphics/ImageBuffer.cpp
 platform/graphics/ImageBufferAllocator.cpp
 platform/graphics/ImageBufferBackend.cpp
-platform/graphics/ImageBufferPipe.cpp
+platform/graphics/ImageBufferContextSwitcher.cpp
 platform/graphics/ImageDecoder.cpp
 platform/graphics/ImageFrame.cpp
 platform/graphics/ImageFrameAnimator.cpp
@@ -2362,6 +2367,7 @@ platform/graphics/ImageResolution.cpp
 platform/graphics/IntPoint.cpp
 platform/graphics/IntRect.cpp
 platform/graphics/IntSize.cpp
+platform/graphics/TransparencyLayerContextSwitcher.cpp
 platform/graphics/LayoutPoint.cpp
 platform/graphics/LayoutRect.cpp
 platform/graphics/LayoutSize.cpp
@@ -2453,12 +2459,9 @@ platform/graphics/filters/Filter.cpp
 platform/graphics/filters/FilterEffect.cpp
 platform/graphics/filters/FilterFunction.cpp
 platform/graphics/filters/FilterImage.cpp
-platform/graphics/filters/FilterImageTargetSwitcher.cpp
 platform/graphics/filters/FilterOperation.cpp
 platform/graphics/filters/FilterOperations.cpp
 platform/graphics/filters/FilterResults.cpp
-platform/graphics/filters/FilterStyleTargetSwitcher.cpp
-platform/graphics/filters/FilterTargetSwitcher.cpp
 platform/graphics/filters/PointLightSource.cpp
 platform/graphics/filters/SourceAlpha.cpp
 platform/graphics/filters/SourceGraphic.cpp
@@ -2497,15 +2500,16 @@ platform/graphics/transforms/IdentityTransformOperation.cpp
 platform/graphics/transforms/Matrix3DTransformOperation.cpp
 platform/graphics/transforms/MatrixTransformOperation.cpp
 platform/graphics/transforms/PerspectiveTransformOperation.cpp
+platform/graphics/transforms/Quaternion.cpp
 platform/graphics/transforms/RotateTransformOperation.cpp
 platform/graphics/transforms/ScaleTransformOperation.cpp
 platform/graphics/transforms/SkewTransformOperation.cpp
 platform/graphics/transforms/TransformOperation.cpp
 platform/graphics/transforms/TransformOperations.cpp
+platform/graphics/transforms/TransformOperationsSharedPrimitivesPrefix.cpp
 platform/graphics/transforms/TransformState.cpp
 platform/graphics/transforms/TransformationMatrix.cpp
 platform/graphics/transforms/TranslateTransformOperation.cpp
-platform/graphics/transforms/Quaternion.cpp
 platform/mediacapabilities/MediaCapabilitiesLogging.cpp
 platform/mediacapabilities/MediaEngineConfigurationFactory.cpp
 platform/mediarecorder/MediaRecorderPrivate.cpp
@@ -2869,6 +2873,8 @@ rendering/svg/RenderSVGPath.cpp
 rendering/svg/RenderSVGRect.cpp
 rendering/svg/RenderSVGResourceClipper.cpp
 rendering/svg/RenderSVGResourceContainer.cpp
+rendering/svg/RenderSVGResourceFilter.cpp
+rendering/svg/RenderSVGResourceFilterPrimitive.cpp
 rendering/svg/RenderSVGResourceGradient.cpp
 rendering/svg/RenderSVGResourceLinearGradient.cpp
 rendering/svg/RenderSVGResourceMarker.cpp

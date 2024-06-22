@@ -35,19 +35,19 @@
 #include "WebProcessProxy.h"
 #include <WebCore/SecurityOriginData.h>
 
-#define MESSAGE_CHECK(assertion) MESSAGE_CHECK_BASE(assertion, m_page.process().connection())
+#define MESSAGE_CHECK(assertion) MESSAGE_CHECK_BASE(assertion, m_page.legacyMainFrameProcess().connection())
 
 namespace WebKit {
 
 PlatformXRSystem::PlatformXRSystem(WebPageProxy& page)
     : m_page(page)
 {
-    m_page.process().addMessageReceiver(Messages::PlatformXRSystem::messageReceiverName(), m_page.webPageID(), *this);
+    m_page.legacyMainFrameProcess().addMessageReceiver(Messages::PlatformXRSystem::messageReceiverName(), m_page.webPageIDInMainFrameProcess(), *this);
 }
 
 PlatformXRSystem::~PlatformXRSystem()
 {
-    m_page.process().removeMessageReceiver(Messages::PlatformXRSystem::messageReceiverName(), m_page.webPageID());
+    m_page.legacyMainFrameProcess().removeMessageReceiver(Messages::PlatformXRSystem::messageReceiverName(), m_page.webPageIDInMainFrameProcess());
 }
 
 void PlatformXRSystem::invalidate()
@@ -70,7 +70,7 @@ void PlatformXRSystem::ensureImmersiveSessionActivity()
     if (m_immersiveSessionActivity && m_immersiveSessionActivity->isValid())
         return;
 
-    m_immersiveSessionActivity = m_page.process().throttler().foregroundActivity("XR immersive session"_s).moveToUniquePtr();
+    m_immersiveSessionActivity = m_page.legacyMainFrameProcess().throttler().foregroundActivity("XR immersive session"_s).moveToUniquePtr();
 }
 
 void PlatformXRSystem::enumerateImmersiveXRDevices(CompletionHandler<void(Vector<XRDeviceInfo>&&)>&& completionHandler)
@@ -194,7 +194,7 @@ void PlatformXRSystem::sessionDidEnd(XRDeviceIdentifier deviceIdentifier)
         if (!protectedThis)
             return;
 
-        protectedThis->m_page.send(Messages::PlatformXRSystemProxy::SessionDidEnd(deviceIdentifier));
+        protectedThis->m_page.legacyMainFrameProcess().send(Messages::PlatformXRSystemProxy::SessionDidEnd(deviceIdentifier), protectedThis->m_page.webPageIDInMainFrameProcess());
         protectedThis->m_immersiveSessionActivity = nullptr;
         protectedThis->invalidateImmersiveSessionState();
     });
@@ -207,7 +207,7 @@ void PlatformXRSystem::sessionDidUpdateVisibilityState(XRDeviceIdentifier device
         if (!protectedThis)
             return;
 
-        protectedThis->m_page.send(Messages::PlatformXRSystemProxy::SessionDidUpdateVisibilityState(deviceIdentifier, visibilityState));
+        protectedThis->m_page.legacyMainFrameProcess().send(Messages::PlatformXRSystemProxy::SessionDidUpdateVisibilityState(deviceIdentifier, visibilityState), protectedThis->m_page.webPageIDInMainFrameProcess());
     });
 }
 

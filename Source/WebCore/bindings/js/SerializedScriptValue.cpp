@@ -1961,9 +1961,9 @@ private:
                 if (!addToObjectPoolIfNotDupe<ArrayBufferTag, ResizableArrayBufferTag, SharedArrayBufferTag>(obj))
                     return true;
                 
-                if (arrayBuffer->isShared() && m_context == SerializationContext::WorkerPostMessage) {
+                if (arrayBuffer->isShared() && (m_context == SerializationContext::WorkerPostMessage || m_forStorage == SerializationForStorage::Yes)) {
                     // https://html.spec.whatwg.org/multipage/structured-data.html#structuredserializeinternal
-                    if (!JSC::Options::useSharedArrayBuffer()) {
+                    if (!JSC::Options::useSharedArrayBuffer() || m_forStorage == SerializationForStorage::Yes) {
                         code = SerializationReturnCode::DataCloneError;
                         return true;
                     }
@@ -3683,7 +3683,7 @@ private:
             return false;
         if (m_ptr + length > m_end)
             return false;
-        arrayBuffer = ArrayBuffer::tryCreate(m_ptr, length);
+        arrayBuffer = ArrayBuffer::tryCreate({ m_ptr, static_cast<size_t>(length) });
         if (!arrayBuffer)
             return false;
         m_ptr += length;
@@ -5122,13 +5122,7 @@ private:
                 fail();
                 return JSValue();
             }
-            auto scope = DECLARE_THROW_SCOPE(m_lexicalGlobalObject->vm());
-            JSValue result = JSC::JSWebAssemblyModule::createStub(m_lexicalGlobalObject->vm(), m_lexicalGlobalObject, m_globalObject->webAssemblyModuleStructure(), m_wasmModules->at(index));
-            // Since we are cloning a JSWebAssemblyModule, it's impossible for that
-            // module to not have been a valid module. Therefore, createStub should
-            // not throw.
-            scope.releaseAssertNoException();
-            return result;
+            return JSC::JSWebAssemblyModule::create(m_lexicalGlobalObject->vm(), m_globalObject->webAssemblyModuleStructure(), Ref { *m_wasmModules->at(index) });
         }
         case WasmMemoryTag: {
             if (m_majorVersion >= 12) {
@@ -5152,7 +5146,7 @@ private:
             auto scope = DECLARE_THROW_SCOPE(vm);
             JSWebAssemblyMemory* result = JSC::JSWebAssemblyMemory::tryCreate(m_lexicalGlobalObject, vm, m_globalObject->webAssemblyMemoryStructure());
             // Since we are cloning a JSWebAssemblyMemory, it's impossible for that
-            // module to not have been a valid module. Therefore, createStub should
+            // module to not have been a valid module. Therefore, tryCreate should
             // not throw.
             scope.releaseAssertNoException();
 
@@ -5807,7 +5801,7 @@ SerializedScriptValue::SerializedScriptValue(Vector<uint8_t>&& buffer, Vector<UR
         , Vector<RefPtr<DetachedMediaSourceHandle>>&& detachedMediaSourceHandles
 #endif
 #if ENABLE(WEBASSEMBLY)
-        , std::unique_ptr<WasmModuleArray> wasmModulesArray
+        , WasmModuleArray&& wasmModulesArray
         , std::unique_ptr<WasmMemoryHandleArray> wasmMemoryHandlesArray
 #endif
 #if ENABLE(WEB_CODECS)
@@ -5846,7 +5840,7 @@ SerializedScriptValue::SerializedScriptValue(Vector<uint8_t>&& buffer, Vector<UR
 #endif
         , .inMemoryMessagePorts = WTFMove(inMemoryMessagePorts)
 #if ENABLE(WEBASSEMBLY)
-        , .wasmModulesArray = WTFMove(wasmModulesArray)
+        , .wasmModulesArray = wasmModulesArray.isEmpty() ? nullptr : makeUnique<WasmModuleArray>(WTFMove(wasmModulesArray))
         , .wasmMemoryHandlesArray = WTFMove(wasmMemoryHandlesArray)
 #endif
         , .blobHandles = crossThreadCopy(WTFMove(blobHandles))
@@ -5879,12 +5873,6 @@ size_t SerializedScriptValue::computeMemoryCost() const
             cost += detachedImageBitmap->memoryCost();
     }
 
-#if ENABLE(OFFSCREEN_CANVAS_IN_WORKERS)
-    for (auto& canvas : m_internals.detachedOffscreenCanvases) {
-        if (canvas)
-            cost += canvas->memoryCost();
-    }
-#endif
 #if ENABLE(WEB_RTC)
     for (auto& channel : m_internals.detachedRTCDataChannels) {
         if (channel)
@@ -6301,7 +6289,7 @@ ExceptionOr<Ref<SerializedScriptValue>> SerializedScriptValue::create(JSGlobalOb
                 , WTFMove(detachedMediaSourceHandles)
 #endif
 #if ENABLE(WEBASSEMBLY)
-                , makeUnique<WasmModuleArray>(wasmModules)
+                , WTFMove(wasmModules)
                 , context == SerializationContext::WorkerPostMessage ? makeUnique<WasmMemoryHandleArray>(wasmMemoryHandles) : nullptr
 #endif
 #if ENABLE(WEB_CODECS)

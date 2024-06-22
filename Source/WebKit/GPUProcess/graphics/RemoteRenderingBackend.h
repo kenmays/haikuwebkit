@@ -35,7 +35,6 @@
 #include "MessageReceiver.h"
 #include "MessageSender.h"
 #include "RemoteImageBufferSetIdentifier.h"
-#include "RemoteRenderingBackendCreationParameters.h"
 #include "RemoteResourceCache.h"
 #include "RemoteSerializedImageBufferIdentifier.h"
 #include "RenderingBackendIdentifier.h"
@@ -46,6 +45,7 @@
 #include "StreamConnectionWorkQueue.h"
 #include "StreamMessageReceiver.h"
 #include "StreamServerConnection.h"
+#include <WebCore/ImageBufferPixelFormat.h>
 #include <WebCore/MediaPlayerIdentifier.h>
 #include <WebCore/ProcessIdentity.h>
 #include <WebCore/RenderingResourceIdentifier.h>
@@ -83,7 +83,6 @@ class RemoteSharedResourceCache;
 struct BufferIdentifierSet;
 struct ImageBufferSetPrepareBufferForDisplayInputData;
 struct ImageBufferSetPrepareBufferForDisplayOutputData;
-struct RemoteRenderingBackendCreationParameters;
 enum class SwapBuffersDisplayRequirement : uint8_t;
 
 namespace ShapeDetection {
@@ -92,7 +91,7 @@ class ObjectHeap;
 
 class RemoteRenderingBackend : private IPC::MessageSender, public IPC::StreamMessageReceiver, public CanMakeWeakPtr<RemoteRenderingBackend> {
 public:
-    static Ref<RemoteRenderingBackend> create(GPUConnectionToWebProcess&, RemoteRenderingBackendCreationParameters&&, Ref<IPC::StreamServerConnection>&&);
+    static Ref<RemoteRenderingBackend> create(GPUConnectionToWebProcess&, RenderingBackendIdentifier, Ref<IPC::StreamServerConnection>&&);
     virtual ~RemoteRenderingBackend();
     void stopListeningForIPC();
 
@@ -117,14 +116,14 @@ public:
     RefPtr<WebCore::ImageBuffer> imageBuffer(WebCore::RenderingResourceIdentifier);
     RefPtr<WebCore::ImageBuffer> takeImageBuffer(WebCore::RenderingResourceIdentifier);
 
-    RefPtr<WebCore::ImageBuffer> allocateImageBuffer(const WebCore::FloatSize& logicalSize, WebCore::RenderingMode, WebCore::RenderingPurpose, float resolutionScale, const WebCore::DestinationColorSpace&, WebCore::PixelFormat, WebCore::ImageBufferCreationContext, WebCore::RenderingResourceIdentifier);
+    RefPtr<WebCore::ImageBuffer> allocateImageBuffer(const WebCore::FloatSize& logicalSize, WebCore::RenderingMode, WebCore::RenderingPurpose, float resolutionScale, const WebCore::DestinationColorSpace&, WebCore::ImageBufferPixelFormat, WebCore::ImageBufferCreationContext, WebCore::RenderingResourceIdentifier);
 
     void terminateWebProcess(ASCIILiteral message);
 
     RenderingBackendIdentifier identifier() { return m_renderingBackendIdentifier; }
 private:
     friend class RemoteImageBufferSet;
-    RemoteRenderingBackend(GPUConnectionToWebProcess&, RemoteRenderingBackendCreationParameters&&, Ref<IPC::StreamServerConnection>&&);
+    RemoteRenderingBackend(GPUConnectionToWebProcess&, RenderingBackendIdentifier, Ref<IPC::StreamServerConnection>&&);
     void startListeningForIPC();
     void workQueueInitialize();
     void workQueueUninitialize();
@@ -134,7 +133,7 @@ private:
     uint64_t messageSenderDestinationID() const override;
 
     // Messages to be received.
-    void createImageBuffer(const WebCore::FloatSize& logicalSize, WebCore::RenderingMode, WebCore::RenderingPurpose, float resolutionScale, const WebCore::DestinationColorSpace&, WebCore::PixelFormat, WebCore::RenderingResourceIdentifier);
+    void createImageBuffer(const WebCore::FloatSize& logicalSize, WebCore::RenderingMode, WebCore::RenderingPurpose, float resolutionScale, const WebCore::DestinationColorSpace&, WebCore::ImageBufferPixelFormat, WebCore::RenderingResourceIdentifier);
     void releaseImageBuffer(WebCore::RenderingResourceIdentifier);
     void moveToSerializedBuffer(WebCore::RenderingResourceIdentifier);
     void moveToImageBuffer(WebCore::RenderingResourceIdentifier);

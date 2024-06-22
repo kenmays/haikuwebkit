@@ -729,6 +729,7 @@ set(WebCore_PRIVATE_FRAMEWORK_HEADERS
     bindings/js/JSDOMConvertNumbers.h
     bindings/js/JSDOMConvertObject.h
     bindings/js/JSDOMConvertRecord.h
+    bindings/js/JSDOMConvertResult.h
     bindings/js/JSDOMConvertSequences.h
     bindings/js/JSDOMConvertSerializedScriptValue.h
     bindings/js/JSDOMConvertStrings.h
@@ -816,7 +817,9 @@ set(WebCore_PRIVATE_FRAMEWORK_HEADERS
     contentextensions/URLFilterParser.h
 
     crypto/SerializedCryptoKeyWrap.h
+    crypto/WrappedCryptoKey.h
 
+    css/CSSAnchorValue.h
     css/CSSConditionRule.h
     css/CSSCounterStyle.h
     css/CSSCounterStyleDescriptors.h
@@ -1661,6 +1664,8 @@ set(WebCore_PRIVATE_FRAMEWORK_HEADERS
     page/text-extraction/TextExtraction.h
     page/text-extraction/TextExtractionTypes.h
 
+    page/writing-tools/WritingToolsTypes.h
+
     platform/AbortableTaskQueue.h
     platform/AudioSampleFormat.h
     platform/CaretAnimator.h
@@ -1855,6 +1860,7 @@ set(WebCore_PRIVATE_FRAMEWORK_HEADERS
     platform/encryptedmedia/CDMFactory.h
     platform/encryptedmedia/CDMInstance.h
     platform/encryptedmedia/CDMInstanceSession.h
+    platform/encryptedmedia/CDMKeyGroupingStrategy.h
     platform/encryptedmedia/CDMKeyStatus.h
     platform/encryptedmedia/CDMKeySystemConfiguration.h
     platform/encryptedmedia/CDMMediaCapability.h
@@ -1897,6 +1903,7 @@ set(WebCore_PRIVATE_FRAMEWORK_HEADERS
     platform/graphics/ColorUtilities.h
     platform/graphics/ComplexTextController.h
     platform/graphics/ContentTypeUtilities.h
+    platform/graphics/Damage.h
     platform/graphics/DashArray.h
     platform/graphics/DecodingOptions.h
     platform/graphics/DecomposedGlyphs.h
@@ -1973,7 +1980,7 @@ set(WebCore_PRIVATE_FRAMEWORK_HEADERS
     platform/graphics/ImageBufferAllocator.h
     platform/graphics/ImageBufferBackend.h
     platform/graphics/ImageBufferBackendParameters.h
-    platform/graphics/ImageBufferPipe.h
+    platform/graphics/ImageBufferPixelFormat.h
     platform/graphics/ImageBufferPlatformBackend.h
     platform/graphics/ImageDecoder.h
     platform/graphics/ImageDecoderIdentifier.h
@@ -2353,6 +2360,7 @@ set(WebCore_PRIVATE_FRAMEWORK_HEADERS
     rendering/HitTestRequest.h
     rendering/HitTestResult.h
     rendering/HitTestSource.h
+    rendering/LayoutRepainter.h
     rendering/LayerAncestorClippingStack.h
     rendering/LayerFragment.h
     rendering/LegacyInlineBox.h

@@ -50,7 +50,7 @@
 #import "WKProcessPoolPrivate.h"
 #import "WKSafeBrowsingWarning.h"
 #import "WKScrollView.h"
-#import "WKTextIndicatorStyleType.h"
+#import "WKTextAnimationType.h"
 #import "WKUIDelegatePrivate.h"
 #import "WKWebViewConfigurationInternal.h"
 #import "WKWebViewContentProvider.h"
@@ -63,8 +63,6 @@
 #import "WebPageProxy.h"
 #import "WebPreferences.h"
 #import "WebProcessPool.h"
-#import "WebTextReplacementData.h"
-#import "WebUnifiedTextReplacementContextData.h"
 #import "_WKActivatedElementInfoInternal.h"
 #import <WebCore/ColorCocoa.h>
 #import <WebCore/GraphicsContextCG.h>
@@ -140,10 +138,6 @@ static WebCore::IntDegrees deviceOrientationForUIInterfaceOrientation(UIInterfac
 @interface UIWindow (UIWindowInternal)
 - (BOOL)_isHostedInAnotherProcess;
 @end
-
-#if USE(APPLE_INTERNAL_SDK)
-#import <WebKitAdditions/WKWebViewPrivateAdditions.mm>
-#endif
 
 @implementation WKWebView (WKViewInternalIOS)
 
@@ -853,7 +847,7 @@ static WebCore::Color scrollViewBackgroundColor(WKWebView *webView, AllowPageBac
 
 - (void)_didRelaunchProcess
 {
-    WKWEBVIEW_RELEASE_LOG("%p -[WKWebView _didRelaunchProcess] (pid=%d)", self, _page->processID());
+    WKWEBVIEW_RELEASE_LOG("%p -[WKWebView _didRelaunchProcess] (pid=%d)", self, _page->legacyMainFrameProcessID());
     _perProcessState.hasScheduledVisibleRectUpdate = NO;
     _viewStabilityWhenVisibleContentRectUpdateScheduled = { };
     if (_gestureController)
@@ -890,8 +884,8 @@ static WebCore::Color scrollViewBackgroundColor(WKWebView *webView, AllowPageBac
 
 static CGPoint contentOffsetBoundedInValidRange(UIScrollView *scrollView, CGPoint contentOffset)
 {
-// FIXME: Likely we can remove this special case for watchOS and tvOS.
-#if !PLATFORM(WATCHOS) && !PLATFORM(APPLETV)
+// FIXME: Likely we can remove this special case for watchOS.
+#if !PLATFORM(WATCHOS)
     UIEdgeInsets contentInsets = scrollView.adjustedContentInset;
 #else
     UIEdgeInsets contentInsets = scrollView.contentInset;
@@ -2336,7 +2330,7 @@ static WebCore::FloatPoint constrainContentOffset(WebCore::FloatPoint contentOff
         return;
 
     LOG_WITH_STREAM(VisibleRects, stream << "-[WKWebView " << _page->identifier() << " _dispatchSetViewLayoutSize:] " << viewLayoutSize << " contentZoomScale " << contentZoomScale(self));
-    _page->setViewportConfigurationViewLayoutSize(viewLayoutSize, _page->layoutSizeScaleFactor(), newMinimumEffectiveDeviceWidth);
+    _page->setViewportConfigurationViewLayoutSize(viewLayoutSize, _page->layoutSizeScaleFactorFromClient(), newMinimumEffectiveDeviceWidth);
     _perProcessState.lastSentViewLayoutSize = viewLayoutSize;
     _perProcessState.lastSentMinimumEffectiveDeviceWidth = newMinimumEffectiveDeviceWidth;
 }
@@ -2567,8 +2561,8 @@ static WebCore::FloatPoint constrainContentOffset(WebCore::FloatPoint contentOff
     return contentOffset.y < -contentInsets.top && [self _scrollViewIsRubberBanding:_scrollView.get()];
 }
 
-// FIXME: Likely we can remove this special case for watchOS and tvOS.
-#if !PLATFORM(WATCHOS) && !PLATFORM(APPLETV)
+// FIXME: Likely we can remove this special case for watchOS.
+#if !PLATFORM(WATCHOS)
 - (void)safeAreaInsetsDidChange
 {
     [super safeAreaInsetsDidChange];
@@ -3199,8 +3193,8 @@ static WebCore::IntDegrees activeOrientation(WKWebView *webView)
 
 - (void)_updateScrollViewInsetAdjustmentBehavior
 {
-// FIXME: Likely we can remove this special case for watchOS and tvOS.
-#if !PLATFORM(WATCHOS) && !PLATFORM(APPLETV)
+// FIXME: Likely we can remove this special case for watchOS.
+#if !PLATFORM(WATCHOS)
     if (![_scrollView _contentInsetAdjustmentBehaviorWasExternallyOverridden])
         [_scrollView _setContentInsetAdjustmentBehaviorInternal:self._safeAreaShouldAffectObscuredInsets ? UIScrollViewContentInsetAdjustmentAlways : UIScrollViewContentInsetAdjustmentNever];
 #endif

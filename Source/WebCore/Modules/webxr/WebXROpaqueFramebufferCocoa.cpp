@@ -30,6 +30,7 @@
 
 #include "GraphicsContextGLCocoa.h"
 #include "IntSize.h"
+#include "Logging.h"
 #include "WebGL2RenderingContext.h"
 #include "WebGLFramebuffer.h"
 #include "WebGLRenderingContext.h"
@@ -111,9 +112,9 @@ WebXROpaqueFramebuffer::WebXROpaqueFramebuffer(PlatformXR::LayerHandle handle, R
 
 WebXROpaqueFramebuffer::~WebXROpaqueFramebuffer()
 {
+    releaseAllDisplayAttachments();
+
     if (RefPtr gl = m_context.graphicsContextGL()) {
-        for (auto& layer : m_displayAttachments)
-            layer.release(*gl);
         m_drawAttachments.release(*gl);
         m_resolveAttachments.release(*gl);
         m_resolvedFBO.release(*gl);
@@ -121,8 +122,6 @@ WebXROpaqueFramebuffer::~WebXROpaqueFramebuffer()
     } else {
         // The GraphicsContextGL is gone, so disarm the GCGLOwned objects so
         // their destructors don't assert.
-        for (auto& layer : m_displayAttachments)
-            layer.leakObject();
         m_drawAttachments.leakObject();
         m_resolveAttachments.leakObject();
         m_displayFBO.leakObject();
@@ -147,7 +146,6 @@ void WebXROpaqueFramebuffer::startFrame(const PlatformXR::FrameData::LayerData& 
     ScopedWebGLRestoreTexture restoreTexture { m_context, textureTarget };
     ScopedWebGLRestoreRenderbuffer restoreRenderBuffer { m_context };
 
-    gl->bindFramebuffer(GL::FRAMEBUFFER, m_drawFramebuffer->object());
     // https://immersive-web.github.io/webxr/#opaque-framebuffer
     // The buffers attached to an opaque framebuffer MUST be cleared to the values in the provided table when first created,
     // or prior to the processing of each XR animation frame.
@@ -163,42 +161,23 @@ void WebXROpaqueFramebuffer::startFrame(const PlatformXR::FrameData::LayerData& 
         m_completionSyncEvent = MachSendRight(data.layerSetup->completionSyncEvent);
     }
 
-    int layerCount = (m_displayLayout == PlatformXR::Layout::Layered) ? 2 : 1;
-    for (int layer = 0; layer < layerCount; ++layer) {
-        if (data.colorTexture.handle) {
-            auto colorTextureSource = makeExternalImageSource(data.colorTexture);
-            createAndBindCompositorBuffer(*gl, m_displayAttachments[layer].colorBuffer, GL::BGRA_EXT, WTFMove(colorTextureSource), layer);
-            ASSERT(m_displayAttachments[layer].colorBuffer.image);
-            if (!m_displayAttachments[layer].colorBuffer.image)
-                return;
-        } else {
-            IntSize framebufferSize = data.layerSetup ? toIntSize(data.layerSetup->physicalSize[0]) : IntSize(32, 32);
-            createAndBindTempBuffer(*gl, m_displayAttachments[layer].colorBuffer, GL::RGBA8, framebufferSize);
-        }
+    gl->bindFramebuffer(GL::FRAMEBUFFER, m_drawFramebuffer->object());
+    Vector<GCGLenum, 3> discardAttachments = { GL::COLOR_ATTACHMENT0, GL::DEPTH_ATTACHMENT, GL::STENCIL_ATTACHMENT };
+    gl->framebufferDiscard(GL::FRAMEBUFFER, discardAttachments);
 
-        if (data.depthStencilBuffer.handle) {
-            auto depthStencilBufferSource = makeExternalImageSource(data.depthStencilBuffer);
-            createAndBindCompositorBuffer(*gl, m_displayAttachments[layer].depthStencilBuffer, GL::DEPTH24_STENCIL8, WTFMove(depthStencilBufferSource), layer);
-        }
+    bindCompositorTexturesForDisplay(*gl, data);
+    auto displayAttachmentSet = reusableDisplayAttachmentsAtIndex(m_currentDisplayAttachmentIndex);
+    ASSERT(displayAttachmentSet);
+    if (!displayAttachmentSet) {
+        RELEASE_LOG_ERROR(XR, "WebXROpaqueFramebuffer::startFrame(): unable to find display attachments at index: %zu", m_currentDisplayAttachmentIndex);
+        return;
+    }
+    if (!(*displayAttachmentSet)[0].colorBuffer.image) {
+        RELEASE_LOG_ERROR(XR, "WebXROpaqueFramebuffer::startFrame(): no color texture at index: %zu", m_currentDisplayAttachmentIndex);
+        return;
     }
 
     m_renderingFrameIndex = data.renderingFrameIndex;
-
-    // WebXR must always clear for the rAF of the session. Currently we assume content does not do redundant initial clear,
-    // as the spec says the buffer always starts cleared.
-    ScopedDisableRasterizerDiscard disableRasterizerDiscard { m_context };
-    ScopedEnableBackbuffer enableBackBuffer { m_context };
-    ScopedDisableScissorTest disableScissorTest { m_context };
-    ScopedClearColorAndMask zeroClear { m_context, 0.f, 0.f, 0.f, 0.f, true, true, true, true, };
-    ScopedClearDepthAndMask zeroDepth { m_context, 1.0f, true, m_attributes.depth };
-    ScopedClearStencilAndMask zeroStencil { m_context, 0, GL::FRONT, 0xFFFFFFFF, m_attributes.stencil };
-    GCGLenum clearMask = GL::COLOR_BUFFER_BIT;
-    if (m_attributes.depth)
-        clearMask |= GL::DEPTH_BUFFER_BIT;
-    if (m_attributes.stencil)
-        clearMask |= GL::STENCIL_BUFFER_BIT;
-    gl->bindFramebuffer(GL::FRAMEBUFFER, m_drawFramebuffer->object());
-    gl->clear(clearMask);
 }
 
 void WebXROpaqueFramebuffer::endFrame()
@@ -232,17 +211,18 @@ void WebXROpaqueFramebuffer::endFrame()
         }
     } else
         gl->finish();
-
-    int layerCount = (m_displayLayout == PlatformXR::Layout::Layered) ? 2 : 1;
-    for (int layer = 0; layer < layerCount; ++layer) {
-        m_displayAttachments[layer].colorBuffer.destroyImage(*gl);
-        m_displayAttachments[layer].depthStencilBuffer.destroyImage(*gl);
-    }
 }
 
 bool WebXROpaqueFramebuffer::usesLayeredMode() const
 {
     return m_displayLayout == PlatformXR::Layout::Layered;
+}
+
+void WebXROpaqueFramebuffer::releaseAllDisplayAttachments()
+{
+    for (size_t i = 0; i < m_displayAttachmentsSets.size(); ++i)
+        releaseDisplayAttachmentsAtIndex(i);
+    m_displayAttachmentsSets.clear();
 }
 
 void WebXROpaqueFramebuffer::resolveMSAAFramebuffer(GraphicsContextGL& gl)
@@ -268,9 +248,16 @@ void WebXROpaqueFramebuffer::blitShared(GraphicsContextGL& gl)
 {
     ASSERT(!m_resolvedFBO, "blitShared should not require intermediate resolve buffers");
 
+    auto displayAttachmentSet = reusableDisplayAttachmentsAtIndex(m_currentDisplayAttachmentIndex);
+    ASSERT(displayAttachmentSet);
+    if (!displayAttachmentSet) {
+        RELEASE_LOG_ERROR(XR, "WebXROpaqueFramebuffer::blitShared(): unable to find display attachments at index: %zu", m_currentDisplayAttachmentIndex);
+        return;
+    }
+
     ensure(gl, m_displayFBO);
     gl.bindFramebuffer(GL::FRAMEBUFFER, m_displayFBO);
-    gl.framebufferRenderbuffer(GL::FRAMEBUFFER, GL::COLOR_ATTACHMENT0, GL::RENDERBUFFER, m_displayAttachments[0].colorBuffer.renderBufferObject);
+    gl.framebufferRenderbuffer(GL::FRAMEBUFFER, GL::COLOR_ATTACHMENT0, GL::RENDERBUFFER, (*displayAttachmentSet)[0].colorBuffer.renderBufferObject);
     ASSERT(gl.checkFramebufferStatus(GL::FRAMEBUFFER) == GL::FRAMEBUFFER_COMPLETE);
     resolveMSAAFramebuffer(gl);
 }
@@ -284,6 +271,13 @@ void WebXROpaqueFramebuffer::blitSharedToLayered(GraphicsContextGL& gl)
     PlatformGLObject drawFBO = m_displayFBO;
     ASSERT(drawFBO, "drawFBO shouldn't be the default framebuffer");
 
+    auto displayAttachmentSet = reusableDisplayAttachmentsAtIndex(m_currentDisplayAttachmentIndex);
+    ASSERT(displayAttachmentSet);
+    if (!displayAttachmentSet) {
+        RELEASE_LOG_ERROR(XR, "WebXROpaqueFramebuffer::blitSharedToLayered(): unable to find display attachments at index: %zu", m_currentDisplayAttachmentIndex);
+        return;
+    }
+
     GCGLint xOffset = 0;
     GCGLint width = m_leftPhysicalSize.width();
     GCGLint height = m_leftPhysicalSize.height();
@@ -296,19 +290,21 @@ void WebXROpaqueFramebuffer::blitSharedToLayered(GraphicsContextGL& gl)
         gl.bindFramebuffer(GL::DRAW_FRAMEBUFFER, drawFBO);
 
         GCGLbitfield buffers = GL::COLOR_BUFFER_BIT;
-        gl.framebufferRenderbuffer(GL::DRAW_FRAMEBUFFER, GL::COLOR_ATTACHMENT0, GL::RENDERBUFFER, m_displayAttachments[layer].colorBuffer.renderBufferObject);
+        gl.framebufferRenderbuffer(GL::DRAW_FRAMEBUFFER, GL::COLOR_ATTACHMENT0, GL::RENDERBUFFER, (*displayAttachmentSet)[layer].colorBuffer.renderBufferObject);
 
-        if (m_displayAttachments[layer].depthStencilBuffer.image) {
+        if ((*displayAttachmentSet)[layer].depthStencilBuffer.image) {
             buffers |= GL::DEPTH_BUFFER_BIT;
-            gl.framebufferRenderbuffer(GL::DRAW_FRAMEBUFFER, GL::DEPTH_STENCIL_ATTACHMENT, GL::RENDERBUFFER, m_displayAttachments[layer].depthStencilBuffer.renderBufferObject);
+            gl.framebufferRenderbuffer(GL::DRAW_FRAMEBUFFER, GL::DEPTH_STENCIL_ATTACHMENT, GL::RENDERBUFFER, (*displayAttachmentSet)[layer].depthStencilBuffer.renderBufferObject);
         }
         ASSERT(gl.checkFramebufferStatus(GL::DRAW_FRAMEBUFFER) == GL::FRAMEBUFFER_COMPLETE);
 
         gl.blitFramebuffer(xOffset, 0, xOffset + width, height, 0, 0, width, height, buffers, GL::NEAREST);
 
         // FIXME: https://bugs.webkit.org/show_bug.cgi?id=272104 - [WebXR] Compositor expects reverse-Z values
-        gl.clearDepth(FLT_MIN);
-        gl.clear(GL::DEPTH_BUFFER_BIT | GL::STENCIL_BUFFER_BIT);
+        {
+            ScopedClearDepthAndMask minDepth { m_context, FLT_MIN, true, m_attributes.depth };
+            gl.clear(GL::DEPTH_BUFFER_BIT);
+        }
 
         xOffset += width;
         width = m_rightPhysicalSize.width();
@@ -397,7 +393,7 @@ bool WebXROpaqueFramebuffer::setupFramebuffer(GraphicsContextGL& gl, const Platf
     if (foveationChange) {
         if (m_usingFoveation) {
             const auto& frmd = data.foveationRateMapDesc;
-            if (!gl.addFoveation(leftPhysicalSize, rightPhysicalSize, frmd.screenSize, frmd.horizontalSamples[0], frmd.verticalSamples, frmd.horizontalSamples[1]))
+            if (!gl.addFoveation(leftPhysicalSize, rightPhysicalSize, frmd.screenSize, frmd.horizontalSamplesLeft, frmd.verticalSamples, frmd.horizontalSamplesRight))
                 return false;
             gl.enableFoveation(m_drawAttachments.colorBuffer);
         } else
@@ -417,6 +413,86 @@ bool WebXROpaqueFramebuffer::setupFramebuffer(GraphicsContextGL& gl, const Platf
     }
 
     return gl.checkFramebufferStatus(GL::FRAMEBUFFER) == GL::FRAMEBUFFER_COMPLETE;
+}
+
+const std::array<WebXRExternalAttachments, 2>* WebXROpaqueFramebuffer::reusableDisplayAttachments(const PlatformXR::FrameData::ExternalTextureData& textureData) const
+{
+    auto [imageHandle, isSharedTexture] = textureData.colorTexture;
+    if (imageHandle)
+        return nullptr;
+
+    auto reusableTextureIndex = textureData.reusableTextureIndex;
+    if (reusableTextureIndex >= m_displayAttachmentsSets.size() || !m_displayAttachmentsSets[reusableTextureIndex][0]) {
+        RELEASE_LOG_FAULT(XR, "Unable to find reusable texture at index: %zu", reusableTextureIndex);
+        ASSERT_NOT_REACHED();
+        return nullptr;
+    }
+
+    return &m_displayAttachmentsSets[reusableTextureIndex];
+}
+
+void WebXROpaqueFramebuffer::bindCompositorTexturesForDisplay(GraphicsContextGL& gl, const PlatformXR::FrameData::LayerData& layerData)
+{
+    int layerCount = (m_displayLayout == PlatformXR::Layout::Layered) ? 2 : 1;
+
+    m_currentDisplayAttachmentIndex = layerData.textureData ? layerData.textureData->reusableTextureIndex : 0;
+    if (m_displayAttachmentsSets.size() <= m_currentDisplayAttachmentIndex)
+        m_displayAttachmentsSets.resizeToFit(m_currentDisplayAttachmentIndex + 1);
+
+    if (!layerData.textureData) {
+        m_currentDisplayAttachmentIndex = 0;
+
+        for (int layer = 0; layer < layerCount; ++layer) {
+            IntSize framebufferSize = layerData.layerSetup ? toIntSize(layerData.layerSetup->physicalSize[0]) : IntSize(32, 32);
+            createAndBindTempBuffer(gl, m_displayAttachmentsSets[m_currentDisplayAttachmentIndex][layer].colorBuffer, GL::RGBA8, framebufferSize);
+        }
+        return;
+    }
+
+    auto displayAttachments = reusableDisplayAttachments(*(layerData.textureData));
+    if (displayAttachments)
+        return;
+
+    releaseDisplayAttachmentsAtIndex(m_currentDisplayAttachmentIndex);
+
+    for (int layer = 0; layer < layerCount; ++layer) {
+        ASSERT(layerData.textureData->colorTexture.handle);
+        if (!layerData.textureData->colorTexture.handle)
+            return;
+
+        auto colorTextureSource = makeExternalImageSource(layerData.textureData->colorTexture);
+        createAndBindCompositorBuffer(gl, m_displayAttachmentsSets[m_currentDisplayAttachmentIndex][layer].colorBuffer, GL::BGRA_EXT, WTFMove(colorTextureSource), layer);
+        ASSERT(m_displayAttachmentsSets[m_currentDisplayAttachmentIndex][layer].colorBuffer.image);
+        if (!m_displayAttachmentsSets[m_currentDisplayAttachmentIndex][layer].colorBuffer.image)
+            return;
+
+        if (layerData.textureData->depthStencilBuffer.handle) {
+            auto depthStencilBufferSource = makeExternalImageSource(layerData.textureData->depthStencilBuffer);
+            createAndBindCompositorBuffer(gl, m_displayAttachmentsSets[m_currentDisplayAttachmentIndex][layer].depthStencilBuffer, GL::DEPTH24_STENCIL8, WTFMove(depthStencilBufferSource), layer);
+        }
+    }
+}
+
+const std::array<WebXRExternalAttachments, 2>* WebXROpaqueFramebuffer::reusableDisplayAttachmentsAtIndex(size_t index)
+{
+    if (index >= m_displayAttachmentsSets.size())
+        return nullptr;
+
+    return &m_displayAttachmentsSets[index];
+}
+
+void WebXROpaqueFramebuffer::releaseDisplayAttachmentsAtIndex(size_t index)
+{
+    if (index >= m_displayAttachmentsSets.size())
+        return;
+
+    RefPtr gl = m_context.graphicsContextGL();
+    for (auto& attachments : m_displayAttachmentsSets[index]) {
+        if (gl)
+            attachments.release(*gl);
+        else
+            attachments.leakObject();
+    }
 }
 
 void WebXROpaqueFramebuffer::allocateRenderbufferStorage(GraphicsContextGL& gl, GCGLOwnedRenderbuffer& buffer, GCGLsizei samples, GCGLenum internalFormat, IntSize size)

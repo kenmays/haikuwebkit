@@ -49,7 +49,7 @@ enum class BindingFailure;
 
 class Module : public ThreadSafeRefCounted<Module> {
 public:
-    using ValidationResult = Expected<RefPtr<Module>, String>;
+    using ValidationResult = Expected<Ref<Module>, String>;
     typedef void CallbackType(ValidationResult&&);
     using AsyncValidationCallback = RefPtr<SharedTask<CallbackType>>;
 
@@ -88,7 +88,6 @@ private:
     RefPtr<CalleeGroup> m_calleeGroups[numberOfMemoryModes];
     Ref<LLIntCallees> m_llintCallees;
     Ref<IPIntCallees> m_ipintCallees;
-    MacroAssemblerCodeRef<JITCompilationPtrTag> m_llintEntryThunks;
     FixedVector<MacroAssemblerCodeRef<WasmEntryPtrTag>> m_wasmToJSExitStubs;
     Lock m_lock;
 };

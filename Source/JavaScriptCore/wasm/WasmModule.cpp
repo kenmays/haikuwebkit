@@ -39,7 +39,6 @@ Module::Module(LLIntPlan& plan)
     : m_moduleInformation(plan.takeModuleInformation())
     , m_llintCallees(LLIntCallees::createFromVector(plan.takeCallees()))
     , m_ipintCallees(IPIntCallees::create(0))
-    , m_llintEntryThunks(plan.takeEntryThunks())
     , m_wasmToJSExitStubs(plan.takeWasmToJSExitStubs())
 {
 }
@@ -48,12 +47,11 @@ Module::Module(IPIntPlan& plan)
     : m_moduleInformation(plan.takeModuleInformation())
     , m_llintCallees(LLIntCallees::create(0))
     , m_ipintCallees(IPIntCallees::createFromVector(plan.takeCallees()))
-    , m_llintEntryThunks(plan.takeEntryThunks())
     , m_wasmToJSExitStubs(plan.takeWasmToJSExitStubs())
 {
 }
 
-Module::~Module() { }
+Module::~Module() = default;
 
 Wasm::TypeIndex Module::typeIndexFromFunctionIndexSpace(unsigned functionIndexSpace) const
 {

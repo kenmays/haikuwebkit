@@ -31,21 +31,44 @@
 
 #include "config.h"
 
+#include "MoveOnly.h"
 #include "Test.h"
 #include "WTFTestUtilities.h"
 #include <sstream>
+#include <wtf/text/StringConcatenateNumbers.h>
 #include <wtf/unicode/CharacterNames.h>
+
+namespace WTF {
+
+template<> class StringTypeAdapter<MoveOnly, void> {
+public:
+    StringTypeAdapter(const MoveOnly& moveOnly)
+        : m_moveOnly { moveOnly }
+    {
+    }
+
+    unsigned length() const { return StringTypeAdapter<unsigned>(m_moveOnly.value()).length(); }
+    bool is8Bit() const { return StringTypeAdapter<unsigned>(m_moveOnly.value()).is8Bit(); }
+    template<typename CharacterType> void writeTo(CharacterType* destination) const
+    {
+        StringTypeAdapter<unsigned>(m_moveOnly.value()).writeTo(destination);
+    }
+
+private:
+    const MoveOnly& m_moveOnly;
+};
+
+} // namespace WTF
 
 namespace TestWebKitAPI {
 
-static void expectBuilderContent(StringView expected, const StringBuilder& builder)
+static String builderContent(const StringBuilder& builder)
 {
     // Not using builder.toString() or builder.toStringPreserveCapacity() because they all
     // change internal state of builder.
     if (builder.is8Bit())
-        EXPECT_EQ(expected, String(builder.span<LChar>()));
-    else
-        EXPECT_EQ(expected, String(builder.span<UChar>()));
+        return builder.span<LChar>();
+    return builder.span<UChar>();
 }
 
 void expectEmpty(const StringBuilder& builder)
@@ -65,24 +88,24 @@ TEST(StringBuilderTest, Append)
 {
     StringBuilder builder;
     builder.append(String("0123456789"_s));
-    expectBuilderContent("0123456789"_s, builder);
+    EXPECT_EQ("0123456789"_s, builderContent(builder));
     builder.append("abcd"_s);
-    expectBuilderContent("0123456789abcd"_s, builder);
+    EXPECT_EQ("0123456789abcd"_s, builderContent(builder));
     builder.append(std::span { reinterpret_cast<const LChar*>("efgh"), 3 });
-    expectBuilderContent("0123456789abcdefg"_s, builder);
+    EXPECT_EQ("0123456789abcdefg"_s, builderContent(builder));
     builder.append(""_s);
-    expectBuilderContent("0123456789abcdefg"_s, builder);
+    EXPECT_EQ("0123456789abcdefg"_s, builderContent(builder));
     builder.append('#');
-    expectBuilderContent("0123456789abcdefg#"_s, builder);
+    EXPECT_EQ("0123456789abcdefg#"_s, builderContent(builder));
 
     builder.toString(); // Test after reifyString().
     StringBuilder builder1;
     builder.append(""_span);
-    expectBuilderContent("0123456789abcdefg#"_s, builder);
+    EXPECT_EQ("0123456789abcdefg#"_s, builderContent(builder));
     builder1.append(builder.span<LChar>());
     builder1.append("XYZ"_s);
     builder.append(builder1.span<LChar>());
-    expectBuilderContent("0123456789abcdefg#0123456789abcdefg#XYZ"_s, builder);
+    EXPECT_EQ("0123456789abcdefg#0123456789abcdefg#XYZ"_s, builderContent(builder));
 
     StringBuilder builder2;
     builder2.reserveCapacity(100);
@@ -102,7 +125,7 @@ TEST(StringBuilderTest, Append)
     builderForUChar32Append.append(U'A');
     EXPECT_EQ(3U, builderForUChar32Append.length());
     const UChar resultArray[] = { U16_LEAD(frakturAChar), U16_TRAIL(frakturAChar), 'A' };
-    expectBuilderContent(String({ resultArray, std::size(resultArray) }), builderForUChar32Append);
+    EXPECT_EQ(String({ resultArray, std::size(resultArray) }), builderContent(builderForUChar32Append));
     {
         StringBuilder builder;
         StringBuilder builder2;
@@ -116,7 +139,7 @@ TEST(StringBuilderTest, Append)
         builder.append(std::span { data });
         EXPECT_EQ(4U, builder.length());
         const UChar resultArray[] = { U16_LEAD(frakturAChar), U16_TRAIL(frakturAChar), U16_LEAD(frakturAChar), U16_TRAIL(frakturAChar) };
-        expectBuilderContent(String({ resultArray, std::size(resultArray) }), builder);
+        EXPECT_EQ(String({ resultArray, std::size(resultArray) }), builderContent(builder));
     }
 }
 
@@ -131,7 +154,7 @@ TEST(StringBuilderTest, AppendIntMin)
     std::string expectedString;
     stringStream >> expectedString;
 
-    expectBuilderContent(String::fromLatin1(expectedString.c_str()), builder);
+    EXPECT_EQ(String::fromLatin1(expectedString.c_str()), builderContent(builder));
 }
 
 TEST(StringBuilderTest, VariadicAppend)
@@ -139,52 +162,139 @@ TEST(StringBuilderTest, VariadicAppend)
     {
         StringBuilder builder;
         builder.append(String("0123456789"_s));
-        expectBuilderContent("0123456789"_s, builder);
+        EXPECT_EQ("0123456789"_s, builderContent(builder));
         builder.append("abcd"_s);
-        expectBuilderContent("0123456789abcd"_s, builder);
+        EXPECT_EQ("0123456789abcd"_s, builderContent(builder));
         builder.append('e');
-        expectBuilderContent("0123456789abcde"_s, builder);
+        EXPECT_EQ("0123456789abcde"_s, builderContent(builder));
         builder.append(""_s);
-        expectBuilderContent("0123456789abcde"_s, builder);
+        EXPECT_EQ("0123456789abcde"_s, builderContent(builder));
     }
 
     {
         StringBuilder builder;
         builder.append(String("0123456789"_s), "abcd"_s, 'e', ""_s);
-        expectBuilderContent("0123456789abcde"_s, builder);
+        EXPECT_EQ("0123456789abcde"_s, builderContent(builder));
         builder.append(String("A"_s), "B"_s, 'C', ""_s);
-        expectBuilderContent("0123456789abcdeABC"_s, builder);
+        EXPECT_EQ("0123456789abcdeABC"_s, builderContent(builder));
     }
 
     {
         StringBuilder builder;
         builder.append(String("0123456789"_s), "abcd"_s, bullseye, ""_s);
-        expectBuilderContent(makeString("0123456789abcd"_s, String({ &bullseye, 1 })), builder);
+        EXPECT_EQ(makeString("0123456789abcd"_s, bullseye), builderContent(builder));
         builder.append(String("A"_s), "B"_s, 'C', ""_s);
-        expectBuilderContent(makeString("0123456789abcd"_s, String({ &bullseye, 1 }), "ABC"_s), builder);
+        EXPECT_EQ(makeString("0123456789abcd"_s, bullseye, "ABC"_s), builderContent(builder));
     }
 
     {
         // Test where we upconvert the StringBuilder from 8-bit to 16-bit, and don't fit in the existing capacity.
         StringBuilder builder;
         builder.append(String("0123456789"_s), "abcd"_s, 'e', ""_s);
-        expectBuilderContent("0123456789abcde"_s, builder);
+        EXPECT_EQ("0123456789abcde"_s, builderContent(builder));
         EXPECT_TRUE(builder.is8Bit());
         EXPECT_LT(builder.capacity(), builder.length() + 3);
         builder.append(String("A"_s), "B"_s, bullseye, ""_s);
-        expectBuilderContent(makeString("0123456789abcdeAB"_s, String({ &bullseye, 1 })), builder);
+        EXPECT_EQ(makeString("0123456789abcdeAB"_s, bullseye), builderContent(builder));
     }
 
     {
         // Test where we upconvert the StringBuilder from 8-bit to 16-bit, but would have fit in the capacity if the upconvert wasn't necessary.
         StringBuilder builder;
         builder.append(String("0123456789"_s), "abcd"_s, 'e', ""_s);
-        expectBuilderContent("0123456789abcde"_s, builder);
+        EXPECT_EQ("0123456789abcde"_s, builderContent(builder));
         builder.reserveCapacity(32);
         EXPECT_TRUE(builder.is8Bit());
         EXPECT_GE(builder.capacity(), builder.length() + 3);
         builder.append(String("A"_s), "B"_s, bullseye, ""_s);
-        expectBuilderContent(makeString("0123456789abcdeAB"_s, String({ &bullseye, 1 })), builder);
+        EXPECT_EQ(makeString("0123456789abcdeAB"_s, bullseye), builderContent(builder));
+    }
+}
+
+TEST(StringBuilderTest, Interleave)
+{
+    std::array strings { "a"_s, "b"_s, "c"_s };
+
+    {
+        StringBuilder builder;
+        builder.append('[', interleave(strings, [](auto& builder, auto& s) { builder.append(s); }, ", "_s), ']');
+
+        EXPECT_EQ(String("[a, b, c]"_s), builderContent(builder));
+    }
+
+    {
+        StringBuilder builder;
+        builder.append('[', interleave(strings, [](auto& s) { return s; }, ", "_s), ']');
+
+        EXPECT_EQ(String("[a, b, c]"_s), builderContent(builder));
+    }
+
+    {
+        StringBuilder builder;
+        builder.append('[', interleave(strings, ", "_s), ']');
+
+        EXPECT_EQ(String("[a, b, c]"_s), builderContent(builder));
+    }
+}
+
+struct A { int value; };
+struct B { int value; };
+
+[[maybe_unused]] static void serializeOverloadBuilder(StringBuilder& builder, const A& a)
+{
+    builder.append(a.value);
+}
+
+[[maybe_unused]] static void serializeOverloadBuilder(StringBuilder& builder, const B& b)
+{
+    builder.append(b.value);
+}
+
+[[maybe_unused]] static int serializeOverloadReturn(const A& a)
+{
+    return a.value;
+}
+
+[[maybe_unused]] static int serializeOverloadReturn(const B& b)
+{
+    return b.value;
+}
+
+TEST(StringBuilderTest, InterleaveOverload)
+{
+    std::array as { A { 1 }, A { 2 }, A { 3 } };
+
+    {
+        StringBuilder builder;
+        builder.append('[', interleave(as, serializeOverloadBuilder, ", "_s), ']');
+
+        EXPECT_EQ(String("[1, 2, 3]"_s), builderContent(builder));
+    }
+}
+
+TEST(StringBuilderTest, InterleaveNoCopies)
+{
+    std::array values { MoveOnly { 1 }, MoveOnly { 2 }, MoveOnly { 3 } };
+
+    {
+        StringBuilder builder;
+        builder.append('[', interleave(values, [](auto& builder, auto& moveOnly) { builder.append(moveOnly.value()); }, ", "_s), ']');
+
+        EXPECT_EQ(String("[1, 2, 3]"_s), builderContent(builder));
+    }
+
+    {
+        StringBuilder builder;
+        builder.append('[', interleave(values, [](auto& moveOnly) { return moveOnly.value(); }, ", "_s), ']');
+
+        EXPECT_EQ(String("[1, 2, 3]"_s), builderContent(builder));
+    }
+
+    {
+        StringBuilder builder;
+        builder.append('[', interleave(values, ", "_s), ']');
+
+        EXPECT_EQ(String("[1, 2, 3]"_s), builderContent(builder));
     }
 }
 
@@ -291,15 +401,15 @@ TEST(StringBuilderTest, Resize)
     builder.append("0123456789"_s);
     builder.shrink(10);
     EXPECT_EQ(10U, builder.length());
-    expectBuilderContent("0123456789"_s, builder);
+    EXPECT_EQ("0123456789"_s, builderContent(builder));
     builder.shrink(8);
     EXPECT_EQ(8U, builder.length());
-    expectBuilderContent("01234567"_s, builder);
+    EXPECT_EQ("01234567"_s, builderContent(builder));
 
     builder.toString();
     builder.shrink(7);
     EXPECT_EQ(7U, builder.length());
-    expectBuilderContent("0123456"_s, builder);
+    EXPECT_EQ("0123456"_s, builderContent(builder));
     builder.shrink(0);
     expectEmpty(builder);
 }

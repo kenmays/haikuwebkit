@@ -1163,7 +1163,9 @@ class CheckOutPullRequest(steps.ShellSequence, ShellMixin):
     def run(self):
         self.commands = []
 
-        remote = self.getProperty('github.head.repo.full_name', DEFAULT_REMOTE).split('/')[0]
+        remote, repo_name = self.getProperty('github.head.repo.full_name', DEFAULT_REMOTE).split('/', 1)
+        if '-' in repo_name:
+            remote = f"{remote}-{repo_name.split('-', 1)[-1]}"
         project = self.getProperty('github.head.repo.full_name', self.getProperty('project'))
         pr_branch = self.getProperty('github.head.ref', DEFAULT_BRANCH)
         rebase_target_hash = self.getProperty('ews_revision') or self.getProperty('got_revision')
@@ -2509,7 +2511,7 @@ class CheckStatusOfPR(buildstep.BuildStep, GitHubMixin, AddToLogMixin):
     name = 'check-status-of-pr'
     flunkOnFailure = False
     haltOnFailure = False
-    EMBEDDED_CHECKS = ['ios', 'ios-sim', 'ios-wk2', 'ios-wk2-wpt', 'api-ios', 'tv', 'tv-sim', 'watch', 'watch-sim']
+    EMBEDDED_CHECKS = ['ios', 'ios-sim', 'ios-wk2', 'ios-wk2-wpt', 'api-ios', 'vision', 'vision-sim', 'vision-wk2', 'tv', 'tv-sim', 'watch', 'watch-sim']
     MACOS_CHECKS = ['mac', 'mac-AS-debug', 'api-mac', 'mac-wk1', 'mac-wk2', 'mac-AS-debug-wk2', 'mac-wk2-stress', 'jsc', 'jsc-arm64']
     LINUX_CHECKS = ['gtk', 'gtk-wk2', 'api-gtk', 'wpe', 'wpe-cairo', 'wpe-wk2', 'api-wpe', 'jsc-armv7', 'jsc-armv7-tests']
     WINDOWS_CHECKS = ['wincairo']
@@ -3123,11 +3125,11 @@ class InstallWinDependencies(shell.ShellCommandNewStyle):
 
 def customBuildFlag(platform, fullPlatform):
     # FIXME: Make a common 'supported platforms' list.
-    if platform not in ('gtk', 'wincairo', 'ios', 'jsc-only', 'wpe', 'playstation', 'tvos', 'watchos'):
+    if platform not in ('gtk', 'wincairo', 'ios', 'visionos', 'jsc-only', 'wpe', 'playstation', 'tvos', 'watchos'):
         return []
     if 'simulator' in fullPlatform:
         platform = platform + '-simulator'
-    elif platform in ['ios', 'tvos', 'watchos']:
+    elif platform in ['ios', 'visionos', 'tvos', 'watchos']:
         platform = platform + '-device'
     return ['--' + platform]
 
@@ -3179,7 +3181,7 @@ class CompileWebKit(shell.Compile, AddToLogMixin, ShellMixin):
     build_command = ['perl', 'Tools/Scripts/build-webkit']
     filter_command = ['perl', 'Tools/Scripts/filter-build-webkit', '-logfile', 'build-log.txt']
     VALID_ADDITIONAL_ARGUMENTS_LIST = []  # If additionalArguments is added to config.json for CompileWebKit step, it should be added here as well.
-    APPLE_PLATFORMS = ('mac', 'ios', 'tvos', 'watchos')
+    APPLE_PLATFORMS = ('mac', 'ios', 'visionos', 'tvos', 'watchos')
 
     def __init__(self, skipUpload=False, **kwargs):
         self.skipUpload = skipUpload
@@ -3608,7 +3610,7 @@ class RunJavaScriptCoreTests(shell.Test, AddToLogMixin, ShellMixin):
 
         self.setCommand(self.command + customBuildFlag(self.getProperty('platform'), self.getProperty('fullPlatform')))
         self.command.extend(self.command_extra)
-        self.command = self.shell_command(' '.join(self.command) + ' 2>&1 | python3 Tools/Scripts/filter-jsc-tests')
+        self.command = self.shell_command(' '.join(self.command) + ' 2>&1 | Tools/Scripts/filter-test-logs jsc')
         return super().start()
 
     def evaluateCommand(self, cmd):
@@ -3909,7 +3911,7 @@ class WaitForCrashCollection(shell.Compile):
         return shell.Compile.getResultSummary(self)
 
 
-class RunWebKitTests(shell.Test, AddToLogMixin):
+class RunWebKitTests(shell.Test, AddToLogMixin, ShellMixin):
     name = 'layout-tests'
     description = ['layout-tests running']
     descriptionDone = ['layout-tests']
@@ -3930,7 +3932,7 @@ class RunWebKitTests(shell.Test, AddToLogMixin):
                WithProperties('--%(configuration)s')]
 
     def __init__(self, **kwargs):
-        super().__init__(logEnviron=False, **kwargs)
+        super().__init__(logEnviron=False, timeout=5.5 * 60 * 60, **kwargs)
         self.incorrectLayoutLines = []
         self.failing_tests_filtered = []
         self.preexisting_failures_in_results_db = []
@@ -3984,6 +3986,7 @@ class RunWebKitTests(shell.Test, AddToLogMixin):
         self.log_observer_json = logobserver.BufferLogObserver()
         self.addLogObserver('json', self.log_observer_json)
         self.setLayoutTestCommand()
+        self.command = self.shell_command(' '.join(str(c) for c in self.command) + ' 2>&1 | Tools/Scripts/filter-test-logs layout')
         return super().start()
 
     # FIXME: This will break if run-webkit-tests changes its default log formatter.
@@ -4110,6 +4113,17 @@ class RunWebKitTests(shell.Test, AddToLogMixin):
     def evaluateCommand(self, cmd):
         rc = self.evaluateResult(cmd)
         previous_build_summary = self.getProperty('build_summary', '')
+        steps_to_add = [
+            GenerateS3URL(
+                f"{self.getProperty('fullPlatform')}-{self.getProperty('architecture')}-{self.getProperty('configuration')}-{self.name}",
+                extension='txt',
+                content_type='text/plain',
+            ), UploadFileToS3(
+                'logs.txt',
+                links={self.name: 'Full logs'},
+                content_type='text/plain',
+            )
+        ]
         if rc == SUCCESS or rc == WARNINGS:
             message = 'Passed layout tests'
             self.descriptionDone = message
@@ -4123,12 +4137,10 @@ class RunWebKitTests(shell.Test, AddToLogMixin):
             self.build.results = SUCCESS
             if RunWebKitTestsInStressMode.FAILURE_MSG_IN_STRESS_MODE not in previous_build_summary:
                 self.setProperty('build_summary', message)
-            self.build.addStepsAfterCurrentStep([ArchiveTestResults(),
-                                                UploadTestResults(),
-                                                ExtractTestResults()])
+            steps_to_add += [ArchiveTestResults(), UploadTestResults(), ExtractTestResults()]
             self.finished(WARNINGS)
         else:
-            steps_to_add = [
+            steps_to_add += [
                 ArchiveTestResults(),
                 UploadTestResults(),
                 ExtractTestResults(),
@@ -4149,7 +4161,7 @@ class RunWebKitTests(shell.Test, AddToLogMixin):
                     KillOldProcesses(),
                     RunWebKitTestsWithoutChange(),
                 ]
-            self.build.addStepsAfterCurrentStep(steps_to_add)
+        self.build.addStepsAfterCurrentStep(steps_to_add)
 
         return rc
 
@@ -4196,6 +4208,17 @@ class RunWebKitTestsInStressMode(RunWebKitTests):
 
     def evaluateCommand(self, cmd):
         rc = self.evaluateResult(cmd)
+        steps_to_add = [
+            GenerateS3URL(
+                f"{self.getProperty('fullPlatform')}-{self.getProperty('architecture')}-{self.getProperty('configuration')}-{self.name}",
+                extension='txt',
+                content_type='text/plain',
+            ), UploadFileToS3(
+                'logs.txt',
+                links={self.name: 'Full logs'},
+                content_type='text/plain',
+            )
+        ]
         if rc == SUCCESS or rc == WARNINGS:
             message = 'Passed layout tests'
             self.descriptionDone = message
@@ -4203,11 +4226,12 @@ class RunWebKitTestsInStressMode(RunWebKitTests):
             self.setProperty('build_summary', message)
         else:
             self.setProperty('build_summary', self.FAILURE_MSG_IN_STRESS_MODE)
-            self.build.addStepsAfterCurrentStep([
+            steps_to_add += [
                 ArchiveTestResults(),
                 UploadTestResults(identifier=self.suffix),
                 ExtractTestResults(identifier=self.suffix),
-            ])
+            ]
+        self.build.addStepsAfterCurrentStep(steps_to_add)
         return rc
 
     def doStepIf(self, step):
@@ -4237,6 +4261,17 @@ class ReRunWebKitTests(RunWebKitTests):
         flaky_failures = sorted(list(flaky_failures))[:self.NUM_FAILURES_TO_DISPLAY]
         flaky_failures_string = ', '.join(flaky_failures)
         previous_build_summary = self.getProperty('build_summary', '')
+        steps_to_add = [
+            GenerateS3URL(
+                f"{self.getProperty('fullPlatform')}-{self.getProperty('architecture')}-{self.getProperty('configuration')}-{self.name}",
+                extension='txt',
+                content_type='text/plain',
+            ), UploadFileToS3(
+                'logs.txt',
+                links={self.name: 'Full logs'},
+                content_type='text/plain',
+            )
+        ]
 
         if rc == SUCCESS or rc == WARNINGS:
             message = 'Passed layout tests'
@@ -4249,6 +4284,7 @@ class ReRunWebKitTests(RunWebKitTests):
                     self.send_email_for_flaky_failure(flaky_failure)
             if RunWebKitTestsInStressMode.FAILURE_MSG_IN_STRESS_MODE not in previous_build_summary:
                 self.setProperty('build_summary', message)
+            self.build.addStepsAfterCurrentStep(steps_to_add)
         elif (self.preexisting_failures_in_results_db and len(self.failing_tests_filtered) == 0):
             # This means all the tests which failed in this run were also failing or flaky in results database
             message = f"Ignored pre-existing failure: {', '.join(self.preexisting_failures_in_results_db)}"
@@ -4256,9 +4292,8 @@ class ReRunWebKitTests(RunWebKitTests):
             self.build.results = SUCCESS
             if RunWebKitTestsInStressMode.FAILURE_MSG_IN_STRESS_MODE not in previous_build_summary:
                 self.setProperty('build_summary', message)
-            self.build.addStepsAfterCurrentStep([ArchiveTestResults(),
-                                                UploadTestResults(identifier='rerun'),
-                                                ExtractTestResults(identifier='rerun')])
+            steps_to_add += [ArchiveTestResults(), UploadTestResults(identifier='rerun'), ExtractTestResults(identifier='rerun')]
+            self.build.addStepsAfterCurrentStep(steps_to_add)
             self.finished(WARNINGS)
         else:
             if (first_results_failing_tests and second_results_failing_tests and len(tests_that_consistently_failed) == 0
@@ -4273,22 +4308,23 @@ class ReRunWebKitTests(RunWebKitTests):
                 self.build.results = SUCCESS
                 if RunWebKitTestsInStressMode.FAILURE_MSG_IN_STRESS_MODE not in previous_build_summary:
                     self.setProperty('build_summary', message)
-                self.build.addStepsAfterCurrentStep([ArchiveTestResults(),
-                                                    UploadTestResults(identifier='rerun'),
-                                                    ExtractTestResults(identifier='rerun')])
+                steps_to_add += [ArchiveTestResults(), UploadTestResults(identifier='rerun'), ExtractTestResults(identifier='rerun')]
+                self.build.addStepsAfterCurrentStep(steps_to_add)
                 self.finished(WARNINGS)
                 return rc
-
-            self.build.addStepsAfterCurrentStep([ArchiveTestResults(),
-                                                UploadTestResults(identifier='rerun'),
-                                                ExtractTestResults(identifier='rerun'),
-                                                RevertAppliedChanges(),
-                                                CleanWorkingDirectory(),
-                                                ValidateChange(verifyBugClosed=False, addURLs=False),
-                                                CompileWebKitWithoutChange(retry_build_on_failure=True),
-                                                ValidateChange(verifyBugClosed=False, addURLs=False),
-                                                KillOldProcesses(),
-                                                RunWebKitTestsWithoutChange()])
+            steps_to_add += [
+                ArchiveTestResults(),
+                UploadTestResults(identifier='rerun'),
+                ExtractTestResults(identifier='rerun'),
+                RevertAppliedChanges(),
+                CleanWorkingDirectory(),
+                ValidateChange(verifyBugClosed=False, addURLs=False),
+                CompileWebKitWithoutChange(retry_build_on_failure=True),
+                ValidateChange(verifyBugClosed=False, addURLs=False),
+                KillOldProcesses(),
+                RunWebKitTestsWithoutChange()
+            ]
+            self.build.addStepsAfterCurrentStep(steps_to_add)
         return rc
 
     @defer.inlineCallbacks
@@ -4344,7 +4380,19 @@ class RunWebKitTestsWithoutChange(RunWebKitTests):
 
     def evaluateCommand(self, cmd):
         rc = shell.Test.evaluateCommand(self, cmd)
-        self.build.addStepsAfterCurrentStep([ArchiveTestResults(), UploadTestResults(identifier='clean-tree'), ExtractTestResults(identifier='clean-tree'), AnalyzeLayoutTestsResults()])
+        steps_to_add = [
+            GenerateS3URL(
+                f"{self.getProperty('fullPlatform')}-{self.getProperty('architecture')}-{self.getProperty('configuration')}-{self.name}",
+                extension='txt',
+                content_type='text/plain',
+            ), UploadFileToS3(
+                'logs.txt',
+                links={self.name: 'Full logs'},
+                content_type='text/plain',
+            )
+        ]
+        steps_to_add += [ArchiveTestResults(), UploadTestResults(identifier='clean-tree'), ExtractTestResults(identifier='clean-tree'), AnalyzeLayoutTestsResults()]
+        self.build.addStepsAfterCurrentStep(steps_to_add)
         self.setProperty('clean_tree_run_status', rc)
         return rc
 
@@ -4413,7 +4461,7 @@ class AnalyzeLayoutTestsResults(buildstep.BuildStep, BugzillaMixin, GitHubMixin)
                 message = 'Failure limit exceed. At least found'
             else:
                 message = 'Found'
-            new_failures_string = ', '.join(sorted(new_failures)[:self.NUM_FAILURES_TO_DISPLAY])
+            new_failures_string = ' '.join(sorted(new_failures)[:self.NUM_FAILURES_TO_DISPLAY])
             message += ' {} new test failure{}: {}'.format(len(new_failures), pluralSuffix, new_failures_string)
             if len(new_failures) > self.NUM_FAILURES_TO_DISPLAY:
                 message += ' ...'
@@ -4694,13 +4742,24 @@ class RunWebKitTestsRedTree(RunWebKitTests):
         first_results_flaky_tests = set(self.getProperty('first_run_flakies', []))
         platform = self.getProperty('platform')
         rc = self.evaluateResult(cmd)
-        next_steps = [ArchiveTestResults(), UploadTestResults(), ExtractTestResults()]
+        steps_to_add = [
+            GenerateS3URL(
+                f"{self.getProperty('fullPlatform')}-{self.getProperty('architecture')}-{self.getProperty('configuration')}-{self.name}",
+                extension='txt',
+                content_type='text/plain',
+            ), UploadFileToS3(
+                'logs.txt',
+                links={self.name: 'Full logs'},
+                content_type='text/plain',
+            )
+        ]
+        steps_to_add += [ArchiveTestResults(), UploadTestResults(), ExtractTestResults()]
         if first_results_failing_tests:
-            next_steps.extend([ValidateChange(verifyBugClosed=False, addURLs=False), KillOldProcesses(), RunWebKitTestsRepeatFailuresRedTree()])
+            steps_to_add.extend([ValidateChange(verifyBugClosed=False, addURLs=False), KillOldProcesses(), RunWebKitTestsRepeatFailuresRedTree()])
         elif first_results_flaky_tests:
-            next_steps.append(AnalyzeLayoutTestsResultsRedTree())
+            steps_to_add.append(AnalyzeLayoutTestsResultsRedTree())
         elif rc == SUCCESS or rc == WARNINGS:
-            next_steps = None
+            steps_to_add = None
             message = 'Passed layout tests'
             self.descriptionDone = message
             self.build.results = SUCCESS
@@ -4711,20 +4770,20 @@ class RunWebKitTestsRedTree(RunWebKitTests):
             # If not, then go to analyze-layout-tests-results where we will retry everything hoping this was a random failure.
             retry_count = int(self.getProperty('retry_count', 0))
             if retry_count < AnalyzeLayoutTestsResultsRedTree.MAX_RETRY:
-                next_steps.append(AnalyzeLayoutTestsResultsRedTree())
+                steps_to_add.append(AnalyzeLayoutTestsResultsRedTree())
             else:
-                next_steps.extend([RevertAppliedChanges(), CleanWorkingDirectory()])
+                steps_to_add.extend([RevertAppliedChanges(), CleanWorkingDirectory()])
                 if platform == 'wpe':
-                    next_steps.append(InstallWpeDependencies())
+                    steps_to_add.append(InstallWpeDependencies())
                 elif platform == 'gtk':
-                    next_steps.append(InstallGtkDependencies())
-                next_steps.extend([
+                    steps_to_add.append(InstallGtkDependencies())
+                steps_to_add.extend([
                     CompileWebKitWithoutChange(retry_build_on_failure=True),
                     ValidateChange(verifyBugClosed=False, addURLs=False),
                     RunWebKitTestsWithoutChangeRedTree(),
                 ])
-        if next_steps:
-            self.build.addStepsAfterCurrentStep(next_steps)
+        if steps_to_add:
+            self.build.addStepsAfterCurrentStep(steps_to_add)
         return rc
 
 
@@ -4752,27 +4811,38 @@ class RunWebKitTestsRepeatFailuresRedTree(RunWebKitTestsRedTree):
         platform = self.getProperty('platform')
         rc = self.evaluateResult(cmd)
         self.setProperty('with_change_repeat_failures_retcode', rc)
-        next_steps = [ArchiveTestResults(), UploadTestResults(identifier='repeat-failures'), ExtractTestResults(identifier='repeat-failures')]
+        steps_to_add = [
+            GenerateS3URL(
+                f"{self.getProperty('fullPlatform')}-{self.getProperty('architecture')}-{self.getProperty('configuration')}-{self.name}",
+                extension='txt',
+                content_type='text/plain',
+            ), UploadFileToS3(
+                'logs.txt',
+                links={self.name: 'Full logs'},
+                content_type='text/plain',
+            )
+        ]
+        steps_to_add += [ArchiveTestResults(), UploadTestResults(identifier='repeat-failures'), ExtractTestResults(identifier='repeat-failures')]
         if with_change_repeat_failures_results_nonflaky_failures or with_change_repeat_failures_timedout:
-            next_steps.extend([
+            steps_to_add.extend([
                 ValidateChange(verifyBugClosed=False, addURLs=False),
                 KillOldProcesses(),
                 RevertAppliedChanges(),
                 CleanWorkingDirectory(),
             ])
             if platform == 'wpe':
-                next_steps.append(InstallWpeDependencies())
+                steps_to_add.append(InstallWpeDependencies())
             elif platform == 'gtk':
-                next_steps.append(InstallGtkDependencies())
-            next_steps.extend([
+                steps_to_add.append(InstallGtkDependencies())
+            steps_to_add.extend([
                 CompileWebKitWithoutChange(retry_build_on_failure=True),
                 ValidateChange(verifyBugClosed=False, addURLs=False),
                 RunWebKitTestsRepeatFailuresWithoutChangeRedTree(),
             ])
         else:
-            next_steps.append(AnalyzeLayoutTestsResultsRedTree())
-        if next_steps:
-            self.build.addStepsAfterCurrentStep(next_steps)
+            steps_to_add.append(AnalyzeLayoutTestsResultsRedTree())
+        if steps_to_add:
+            self.build.addStepsAfterCurrentStep(steps_to_add)
         return rc
 
     @defer.inlineCallbacks
@@ -4822,7 +4892,19 @@ class RunWebKitTestsRepeatFailuresWithoutChangeRedTree(RunWebKitTestsRedTree):
     def evaluateCommand(self, cmd):
         rc = self.evaluateResult(cmd)
         self.setProperty('without_change_repeat_failures_retcode', rc)
-        self.build.addStepsAfterCurrentStep([ArchiveTestResults(), UploadTestResults(identifier='repeat-failures-without-change'), ExtractTestResults(identifier='repeat-failures-without-change'), AnalyzeLayoutTestsResultsRedTree()])
+        steps_to_add = [
+            GenerateS3URL(
+                f"{self.getProperty('fullPlatform')}-{self.getProperty('architecture')}-{self.getProperty('configuration')}-{self.name}",
+                extension='txt',
+                content_type='text/plain',
+            ), UploadFileToS3(
+                'logs.txt',
+                links={self.name: 'Full logs'},
+                content_type='text/plain',
+            )
+        ]
+        steps_to_add += [ArchiveTestResults(), UploadTestResults(identifier='repeat-failures-without-change'), ExtractTestResults(identifier='repeat-failures-without-change'), AnalyzeLayoutTestsResultsRedTree()]
+        self.build.addStepsAfterCurrentStep(steps_to_add)
         return rc
 
     @defer.inlineCallbacks
@@ -4851,7 +4933,19 @@ class RunWebKitTestsWithoutChangeRedTree(RunWebKitTestsWithoutChange):
 
     def evaluateCommand(self, cmd):
         rc = shell.Test.evaluateCommand(self, cmd)
-        self.build.addStepsAfterCurrentStep([ArchiveTestResults(), UploadTestResults(identifier='clean-tree'), ExtractTestResults(identifier='clean-tree'), AnalyzeLayoutTestsResultsRedTree()])
+        steps_to_add = [
+            GenerateS3URL(
+                f"{self.getProperty('fullPlatform')}-{self.getProperty('architecture')}-{self.getProperty('configuration')}-{self.name}",
+                extension='txt',
+                content_type='text/plain',
+            ), UploadFileToS3(
+                'logs.txt',
+                links={self.name: 'Full logs'},
+                content_type='text/plain',
+            )
+        ]
+        steps_to_add += [ArchiveTestResults(), UploadTestResults(identifier='clean-tree'), ExtractTestResults(identifier='clean-tree'), AnalyzeLayoutTestsResultsRedTree()]
+        self.build.addStepsAfterCurrentStep(steps_to_add)
         self.setProperty('clean_tree_run_status', rc)
         return rc
 
@@ -5304,7 +5398,7 @@ class RunAPITests(shell.TestNewStyle, AddToLogMixin, ShellMixin):
     MSG_FOR_EXCESSIVE_LOGS_API_TEST = f'Stopped due to excessive logging, limit: {THRESHOLD_FOR_EXCESSIVE_LOGS_API_TESTS}'
 
     def __init__(self, **kwargs):
-        super().__init__(logEnviron=False, timeout=3600, **kwargs)
+        super().__init__(logEnviron=False, timeout=3 * 60 * 60, **kwargs)
         self.failing_tests_filtered = []
         self.preexisting_failures_in_results_db = []
         self.steps_to_add = []
@@ -5479,7 +5573,7 @@ class ReRunAPITests(RunAPITests):
     suffix = 'second_run'
 
     def doOnFailure(self):
-        self.steps_to_add = [RevertAppliedChanges(), CleanWorkingDirectory(), ValidateChange(verifyBugClosed=False, addURLs=False)]
+        self.steps_to_add += [RevertAppliedChanges(), CleanWorkingDirectory(), ValidateChange(verifyBugClosed=False, addURLs=False)]
         platform = self.getProperty('platform')
         if platform == 'wpe':
             self.steps_to_add.append(InstallWpeDependencies())
@@ -5745,7 +5839,7 @@ class PrintConfiguration(steps.ShellSequence):
         platform = self.getProperty('platform', '*')
         if platform != 'jsc-only':
             platform = platform.split('-')[0]
-        if platform in ('mac', 'ios', 'tvos', 'watchos', '*'):
+        if platform in ('mac', 'ios', 'visionos', 'tvos', 'watchos', '*'):
             command_list.extend(self.command_list_apple)
         elif platform in ('gtk', 'wpe', 'jsc-only'):
             command_list.extend(self.command_list_linux)
@@ -6470,9 +6564,16 @@ class ValidateCommitMessage(steps.ShellSequence, ShellMixin, AddToLogMixin):
             defer.returnValue(rc)
             return
 
-        self.contributors, errors = yield Contributors.load(use_network=True)
-        for error in errors:
-            self._addToLog('stdio', error)
+        retry_attempts = 3
+        for i in range(1, retry_attempts + 1):
+            self.contributors, errors = yield Contributors.load(use_network=True)
+            for error in errors:
+                self._addToLog('stdio', error)
+            self._addToLog('stdio', '\n')
+            if self.contributors:
+                break
+            if i < retry_attempts:
+                self._addToLog('stdio', f'Retrying, attempt {i + 1} of {retry_attempts}...\n')
 
         reviewers, log_text = self.extract_reviewers(self.log_observer.getStdout())
         log_text = log_text.rstrip()
@@ -6482,7 +6583,7 @@ class ValidateCommitMessage(steps.ShellSequence, ShellMixin, AddToLogMixin):
             self.summary = 'ChangeLog modified, WebKit only allows commit messages'
             rc = FAILURE
         elif log_text:
-            self.summary = log_text
+            self.summary = log_text.split('\n')[0]  # Display the first error if there are multiple
             rc = FAILURE
         elif rc == SUCCESS:
             if reviewers and not self.contributors:
@@ -6596,7 +6697,9 @@ class PushPullRequestBranch(shell.ShellCommandNewStyle):
         super().__init__(logEnviron=False, timeout=300, **kwargs)
 
     def run(self, BufferLogObserverClass=logobserver.BufferLogObserver):
-        remote = self.getProperty('github.head.repo.full_name').split('/')[0]
+        remote, repo_name = self.getProperty('github.head.repo.full_name', DEFAULT_REMOTE).split('/', 1)
+        if '-' in repo_name:
+            remote = f"{remote}-{repo_name.split('-', 1)[-1]}"
         head_ref = self.getProperty('github.head.ref')
         self.command = ['git', 'push', '-f', remote, f'HEAD:{head_ref}']
 

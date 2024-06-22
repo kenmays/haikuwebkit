@@ -415,6 +415,10 @@ for this property.
 - (NSUUID *)_enableTextIndicatorStylingForElementWithID:(NSString *)elementID WK_API_AVAILABLE(macos(WK_MAC_TBA), ios(WK_IOS_TBA), visionos(WK_XROS_TBA));
 - (void)_disableTextIndicatorStylingWithUUID:(NSUUID *)nsUUID WK_API_AVAILABLE(macos(WK_MAC_TBA), ios(WK_IOS_TBA), visionos(WK_XROS_TBA));
 
+- (NSUUID *)_enableSourceTextAnimationAfterElementWithID:(NSString *)elementID WK_API_AVAILABLE(macos(WK_MAC_TBA), ios(WK_IOS_TBA), visionos(WK_XROS_TBA));
+- (NSUUID *)_enableFinalTextAnimationForElementWithID:(NSString *)elementID WK_API_AVAILABLE(macos(WK_MAC_TBA), ios(WK_IOS_TBA), visionos(WK_XROS_TBA));
+- (void)_disableTextAnimationWithUUID:(NSUUID *)nsUUID WK_API_AVAILABLE(macos(WK_MAC_TBA), ios(WK_IOS_TBA), visionos(WK_XROS_TBA));
+
 // FIXME: Remove old `-[WKWebView _themeColor]` SPI <rdar://76662644>
 #if TARGET_OS_IPHONE
 @property (nonatomic, readonly) UIColor *_themeColor WK_API_DEPRECATED_WITH_REPLACEMENT("themeColor", ios(15.0, 15.0));
@@ -556,8 +560,6 @@ typedef NS_OPTIONS(NSUInteger, WKDisplayCaptureSurfaces) {
 - (void)_requestTargetedElementInfo:(_WKTargetedElementRequest *)request completionHandler:(void(^)(NSArray<_WKTargetedElementInfo *> *))completionHandler WK_API_AVAILABLE(macos(WK_MAC_TBA), ios(WK_IOS_TBA), visionos(WK_XROS_TBA));
 
 @property (nonatomic, readonly) NSURL *_requiredWebExtensionBaseURL WK_API_AVAILABLE(macos(WK_MAC_TBA), ios(WK_IOS_TBA), visionos(WK_XROS_TBA));
-
-@property (nonatomic, readonly, getter=_isUnifiedTextReplacementActive) BOOL _unifiedTextReplacementActive WK_API_AVAILABLE(macos(WK_MAC_TBA), ios(WK_IOS_TBA));
 
 @end
 
@@ -773,6 +775,8 @@ typedef NS_OPTIONS(NSUInteger, WKDisplayCaptureSurfaces) {
 // Defaults to YES; if set to NO, WebKit will draw the grey wash and highlights itself.
 @property (nonatomic, setter=_setUsePlatformFindUI:) BOOL _usePlatformFindUI WK_API_AVAILABLE(macos(10.15));
 
+@property (nonatomic, readonly) CGFloat minimumMagnification WK_API_AVAILABLE(macos(WK_MAC_TBA));
+
 - (void)_setShouldSuppressFirstResponderChanges:(BOOL)shouldSuppress;
 - (BOOL)_canChangeFrameLayout:(_WKFrameHandle *)frameHandle WK_API_AVAILABLE(macos(10.13.4));
 - (BOOL)_tryToSwipeWithEvent:(NSEvent *)event ignoringPinnedState:(BOOL)ignoringPinnedState WK_API_AVAILABLE(macos(10.13.4));
@@ -815,6 +819,10 @@ typedef NS_OPTIONS(NSUInteger, WKDisplayCaptureSurfaces) {
 - (void)_simulateMouseMove:(NSEvent *)event WK_API_AVAILABLE(macos(13.0));
 
 - (void)_setFont:(NSFont *)font sender:(id)sender WK_API_AVAILABLE(macos(13.3));
+
+- (void)_createFlagsChangedEventMonitorForTesting WK_API_AVAILABLE(macos(WK_MAC_TBA));
+
+- (void)_removeFlagsChangedEventMonitorForTesting WK_API_AVAILABLE(macos(WK_MAC_TBA));
 
 @end
 

@@ -80,10 +80,10 @@ using namespace WebCore;
 @end
 
 @interface WebCoreAVVideoCaptureSourceObserver : NSObject<AVCaptureVideoDataOutputSampleBufferDelegate, AVCapturePhotoCaptureDelegate> {
-    AVVideoCaptureSource* m_callback;
+    ThreadSafeWeakPtr<AVVideoCaptureSource> m_captureSource;
 }
 
--(id)initWithCallback:(AVVideoCaptureSource*)callback;
+-(id)initWithCaptureSource:(AVVideoCaptureSource*)captureSource;
 -(void)disconnect;
 -(void)addNotificationObservers;
 -(void)removeNotificationObservers;
@@ -99,15 +99,6 @@ using namespace WebCore;
 @end
 
 namespace WebCore {
-
-static inline OSType avVideoCapturePixelBufferFormat()
-{
-#if HAVE(DISPLAY_LAYER_BIPLANAR_SUPPORT)
-    return preferedPixelBufferFormat();
-#else
-    return kCVPixelFormatType_420YpCbCr8Planar;
-#endif
-}
 
 static dispatch_queue_t globaVideoCaptureSerialQueue()
 {
@@ -249,7 +240,7 @@ static double cameraZoomScaleFactor(AVCaptureDeviceType deviceType)
 
 AVVideoCaptureSource::AVVideoCaptureSource(AVCaptureDevice* avDevice, const CaptureDevice& device, MediaDeviceHashSalts&& hashSalts, PageIdentifier pageIdentifier)
     : RealtimeVideoCaptureSource(device, WTFMove(hashSalts), pageIdentifier)
-    , m_objcObserver(adoptNS([[WebCoreAVVideoCaptureSourceObserver alloc] initWithCallback:this]))
+    , m_objcObserver(adoptNS([[WebCoreAVVideoCaptureSourceObserver alloc] initWithCaptureSource:this]))
     , m_device(avDevice)
     , m_zoomScaleFactor(cameraZoomScaleFactor([avDevice deviceType]))
 #if PLATFORM(IOS_FAMILY)
@@ -786,17 +777,6 @@ double AVVideoCaptureSource::facingModeFitnessScoreAdjustment() const
     return fitnessScore;
 }
 
-bool AVVideoCaptureSource::prefersPreset(const VideoPreset& preset)
-{
-#if PLATFORM(IOS_FAMILY)
-    return [preset.format() isVideoBinned];
-#else
-    UNUSED_PARAM(preset);
-#endif
-
-    return true;
-}
-
 void AVVideoCaptureSource::setFrameRateAndZoomWithPreset(double requestedFrameRate, double requestedZoom, std::optional<VideoPreset>&& preset)
 {
     requestedZoom *= m_zoomScaleFactor;
@@ -838,7 +818,11 @@ void AVVideoCaptureSource::setSessionSizeFrameRateAndZoom()
     if (!m_currentPreset)
         return;
 
-    ALWAYS_LOG_IF(loggerPtr(), LOGIDENTIFIER, SizeFrameRateAndZoom { m_currentPreset->size().width(), m_currentPreset->size().height(), m_currentFrameRate, m_currentZoom });
+    ALWAYS_LOG_IF(loggerPtr(), LOGIDENTIFIER, SizeFrameRateAndZoom { m_currentPreset->size().width(), m_currentPreset->size().height(), m_currentFrameRate, m_currentZoom }
+#if PLATFORM(IOS_FAMILY)
+        , " binned: ", !!m_currentPreset->format().isVideoBinned
+#endif
+    );
 
     auto* frameRateRange = frameDurationForFrameRate(m_currentFrameRate);
     ASSERT(frameRateRange);
@@ -859,7 +843,7 @@ void AVVideoCaptureSource::setSessionSizeFrameRateAndZoom()
 
 #if PLATFORM(MAC)
         auto settingsDictionary = @{
-            (__bridge NSString *)kCVPixelBufferPixelFormatTypeKey: @(avVideoCapturePixelBufferFormat()),
+            (__bridge NSString *)kCVPixelBufferPixelFormatTypeKey: @(preferedPixelBufferFormat()),
             (__bridge NSString *)kCVPixelBufferWidthKey: @(m_currentPreset->size().width()),
             (__bridge NSString *)kCVPixelBufferHeightKey: @(m_currentPreset->size().height()),
             (__bridge NSString *)kCVPixelBufferIOSurfacePropertiesKey : @{ }
@@ -1096,7 +1080,7 @@ bool AVVideoCaptureSource::setupCaptureSession()
     [session() addInput:videoIn.get()];
 
     m_videoOutput = adoptNS([PAL::allocAVCaptureVideoDataOutputInstance() init]);
-    auto settingsDictionary = adoptNS([[NSMutableDictionary alloc] initWithObjectsAndKeys: @(avVideoCapturePixelBufferFormat()), kCVPixelBufferPixelFormatTypeKey, nil]);
+    auto settingsDictionary = adoptNS([[NSMutableDictionary alloc] initWithObjectsAndKeys: @(preferedPixelBufferFormat()), kCVPixelBufferPixelFormatTypeKey, nil]);
 
     [m_videoOutput setVideoSettings:settingsDictionary.get()];
     [m_videoOutput setAlwaysDiscardsLateVideoFrames:YES];
@@ -1266,6 +1250,16 @@ bool AVVideoCaptureSource::interrupted() const
     return RealtimeMediaSource::interrupted();
 }
 
+static bool isFormatPowerEfficient(AVCaptureDeviceFormat* format)
+{
+#if PLATFORM(IOS_FAMILY)
+    return format.isVideoBinned;
+#else
+    UNUSED_PARAM(format);
+    return false;
+#endif
+}
+
 void AVVideoCaptureSource::generatePresets()
 {
     Vector<VideoPreset> presets;
@@ -1283,7 +1277,7 @@ void AVVideoCaptureSource::generatePresets()
         for (AVFrameRateRange* range in [format videoSupportedFrameRateRanges])
             frameRates.append({ range.minFrameRate, range.maxFrameRate});
 
-        VideoPreset preset { size, WTFMove(frameRates), computeMinZoom(), computeMaxZoom(format) };
+        VideoPreset preset { size, WTFMove(frameRates), computeMinZoom(), computeMaxZoom(format), isFormatPowerEfficient(format) };
         preset.setFormat(format);
         presets.append(WTFMove(preset));
     }
@@ -1332,13 +1326,13 @@ void AVVideoCaptureSource::deviceDisconnected(RetainPtr<NSNotification> notifica
 
 @implementation WebCoreAVVideoCaptureSourceObserver
 
-- (id)initWithCallback:(AVVideoCaptureSource*)callback
+- (id)initWithCaptureSource:(AVVideoCaptureSource*)captureSource
 {
     self = [super init];
     if (!self)
         return nil;
 
-    m_callback = callback;
+    m_captureSource = captureSource;
 
     return self;
 }
@@ -1347,19 +1341,20 @@ void AVVideoCaptureSource::deviceDisconnected(RetainPtr<NSNotification> notifica
 {
     [NSObject cancelPreviousPerformRequestsWithTarget:self];
     [self removeNotificationObservers];
-    m_callback = nullptr;
+    m_captureSource = nullptr;
 }
 
 - (void)addNotificationObservers
 {
-    ASSERT(m_callback);
+    auto source = m_captureSource.get();
+    ASSERT(source);
 
     NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
 
     [center addObserver:self selector:@selector(deviceConnectedDidChange:) name:AVCaptureDeviceWasDisconnectedNotification object:nil];
 
 #if PLATFORM(IOS_FAMILY)
-    AVCaptureSession* session = m_callback->session();
+    AVCaptureSession* session = source->session();
     [center addObserver:self selector:@selector(sessionRuntimeError:) name:AVCaptureSessionRuntimeErrorNotification object:session];
     [center addObserver:self selector:@selector(beginSessionInterrupted:) name:AVCaptureSessionWasInterruptedNotification object:session];
     [center addObserver:self selector:@selector(endSessionInterrupted:) name:AVCaptureSessionInterruptionEndedNotification object:session];
@@ -1373,19 +1368,14 @@ void AVVideoCaptureSource::deviceDisconnected(RetainPtr<NSNotification> notifica
 
 - (void)captureOutput:(AVCaptureOutput*)captureOutput didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer fromConnection:(AVCaptureConnection*)connection
 {
-    if (!m_callback)
-        return;
-
-    m_callback->captureOutputDidOutputSampleBufferFromConnection(captureOutput, sampleBuffer, connection);
+    if (auto source = m_captureSource.get())
+        source->captureOutputDidOutputSampleBufferFromConnection(captureOutput, sampleBuffer, connection);
 }
 
 - (void)captureOutput:(AVCapturePhotoOutput *)captureOutput didFinishProcessingPhoto:(AVCapturePhoto *)photo error:(NSError *)error
 {
-    if (!m_callback)
-        return;
-
-    m_callback->captureOutputDidFinishProcessingPhoto(captureOutput, photo, error);
-
+    if (auto source = m_captureSource.get())
+        source->captureOutputDidFinishProcessingPhoto(captureOutput, photo, error);
 }
 
 - (void)observeValueForKeyPath:keyPath ofObject:(id)object change:(NSDictionary*)change context:(void*)context
@@ -1393,17 +1383,18 @@ void AVVideoCaptureSource::deviceDisconnected(RetainPtr<NSNotification> notifica
     UNUSED_PARAM(object);
     UNUSED_PARAM(context);
 
-    if (!m_callback)
+    auto source = m_captureSource.get();
+    if (!source)
         return;
 
     id newValue = [change valueForKey:NSKeyValueChangeNewKey];
     bool willChange = [[change valueForKey:NSKeyValueChangeNotificationIsPriorKey] boolValue];
 
 #if !RELEASE_LOG_DISABLED
-    if (m_callback->loggerPtr()) {
-        auto identifier = Logger::LogSiteIdentifier("AVVideoCaptureSource"_s, "observeValueForKeyPath"_s, m_callback->logIdentifier());
+    if (source->loggerPtr()) {
+        auto identifier = Logger::LogSiteIdentifier("AVVideoCaptureSource"_s, "observeValueForKeyPath"_s, source->logIdentifier());
         RetainPtr<NSString> valueString = adoptNS([[NSString alloc] initWithFormat:@"%@", newValue]);
-        m_callback->logger().logAlways(m_callback->logChannel(), identifier, willChange ? "will" : "did", " change '", [keyPath UTF8String], "' to ", [valueString UTF8String]);
+        source->logger().logAlways(source->logChannel(), identifier, willChange ? "will" : "did", " change '", [keyPath UTF8String], "' to ", [valueString UTF8String]);
     }
 #endif
 
@@ -1411,35 +1402,35 @@ void AVVideoCaptureSource::deviceDisconnected(RetainPtr<NSNotification> notifica
         return;
 
     if ([keyPath isEqualToString:@"running"])
-        m_callback->captureSessionIsRunningDidChange([newValue boolValue]);
+        source->captureSessionIsRunningDidChange([newValue boolValue]);
     if ([keyPath isEqualToString:@"suspended"])
-        m_callback->captureDeviceSuspendedDidChange();
+        source->captureDeviceSuspendedDidChange();
 }
 
 - (void)deviceConnectedDidChange:(NSNotification*)notification
 {
-    if (m_callback)
-        m_callback->deviceDisconnected(notification);
+    if (auto source = m_captureSource.get())
+        source->deviceDisconnected(notification);
 }
 
 #if PLATFORM(IOS_FAMILY)
 - (void)sessionRuntimeError:(NSNotification*)notification
 {
     NSError *error = notification.userInfo[AVCaptureSessionErrorKey];
-    if (m_callback)
-        m_callback->captureSessionRuntimeError(error);
+    if (auto source = m_captureSource.get())
+        source->captureSessionRuntimeError(error);
 }
 
 - (void)beginSessionInterrupted:(NSNotification*)notification
 {
-    if (m_callback)
-        m_callback->captureSessionBeginInterruption(notification);
+    if (auto source = m_captureSource.get())
+        source->captureSessionBeginInterruption(notification);
 }
 
 - (void)endSessionInterrupted:(NSNotification*)notification
 {
-    if (m_callback)
-        m_callback->captureSessionEndInterruption(notification);
+    if (auto source = m_captureSource.get())
+        source->captureSessionEndInterruption(notification);
 }
 #endif
 

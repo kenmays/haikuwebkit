@@ -238,7 +238,9 @@ public:
         return m_inlineAccessBaseStructureID.get();
     }
 
-    CallLinkInfo* callLinkInfoAt(const ConcurrentJSLocker&, unsigned index);
+    CallLinkInfo* callLinkInfoAt(const ConcurrentJSLocker&, unsigned index, const AccessCase&);
+
+    bool useHandlerIC() const { return useDataIC && Options::useHandlerIC(); }
 
 private:
     ALWAYS_INLINE bool considerRepatchingCacheImpl(VM& vm, CodeBlock* codeBlock, Structure* structure, CacheableIdentifier impl)
@@ -353,6 +355,7 @@ private:
     }
 
     void replaceHandler(CodeBlock*, Ref<InlineCacheHandler>&&);
+    void prependHandler(CodeBlock*, Ref<InlineCacheHandler>&&, bool isMegamorphic);
     void rewireStubAsJumpInAccess(CodeBlock*, InlineCacheHandler&);
 
 public:
@@ -458,12 +461,10 @@ public:
     bool everConsidered : 1 { false };
     bool prototypeIsKnownObject : 1 { false }; // Only relevant for InstanceOf.
     bool sawNonCell : 1 { false };
-    bool hasConstantIdentifier : 1 { true };
     bool propertyIsString : 1 { false };
     bool propertyIsInt32 : 1 { false };
     bool propertyIsSymbol : 1 { false };
     bool canBeMegamorphic : 1 { false };
-    bool isEnumerator : 1 { false };
     bool useDataIC : 1 { false };
 };
 
@@ -531,6 +532,46 @@ inline auto appropriatePutByIdOptimizeFunction(AccessType type) -> decltype(&ope
     return nullptr;
 }
 
+inline bool hasConstantIdentifier(AccessType accessType)
+{
+    switch (accessType) {
+    case AccessType::DeleteByValStrict:
+    case AccessType::DeleteByValSloppy:
+    case AccessType::GetByVal:
+    case AccessType::GetPrivateName:
+    case AccessType::InstanceOf:
+    case AccessType::InByVal:
+    case AccessType::HasPrivateName:
+    case AccessType::HasPrivateBrand:
+    case AccessType::GetByValWithThis:
+    case AccessType::PutByValStrict:
+    case AccessType::PutByValSloppy:
+    case AccessType::PutByValDirectStrict:
+    case AccessType::PutByValDirectSloppy:
+    case AccessType::DefinePrivateNameByVal:
+    case AccessType::SetPrivateNameByVal:
+    case AccessType::SetPrivateBrand:
+    case AccessType::CheckPrivateBrand:
+        return false;
+    case AccessType::DeleteByIdStrict:
+    case AccessType::DeleteByIdSloppy:
+    case AccessType::InById:
+    case AccessType::TryGetById:
+    case AccessType::GetByIdDirect:
+    case AccessType::GetById:
+    case AccessType::GetPrivateNameById:
+    case AccessType::GetByIdWithThis:
+    case AccessType::PutByIdStrict:
+    case AccessType::PutByIdSloppy:
+    case AccessType::PutByIdDirectStrict:
+    case AccessType::PutByIdDirectSloppy:
+    case AccessType::DefinePrivateNameById:
+    case AccessType::SetPrivateNameById:
+        return true;
+    }
+    return false;
+}
+
 struct UnlinkedStructureStubInfo {
     AccessType accessType;
     bool propertyIsInt32 : 1 { false };
@@ -538,7 +579,6 @@ struct UnlinkedStructureStubInfo {
     bool propertyIsSymbol : 1 { false };
     bool prototypeIsKnownObject : 1 { false };
     bool canBeMegamorphic : 1 { false };
-    bool isEnumerator : 1 { false };
     CacheableIdentifier m_identifier; // This only comes from already marked one. Thus, we do not mark it via GC.
     CodeLocationLabel<JSInternalPtrTag> doneLocation;
     CodeLocationLabel<JITStubRoutinePtrTag> slowPathStartLocation;
